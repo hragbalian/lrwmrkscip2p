@@ -2,9 +2,12 @@
 
 
 
+#' Path to purchase wrapper
+#'
+#' 
 
 
-
+#' @export
 
 p2pWrap<-function(
 			SeqDataPath,			# Path to spss sequence data, should be cleaned if there's any cleaning that it needs, first column should contain ids
