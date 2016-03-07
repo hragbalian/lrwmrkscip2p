@@ -1,6 +1,15 @@
 
 
+tpLabels=c("a","b","c","d","e","f","g","h","i","j","k","l","m","n")
+SeqDataPath<-"/users/hragbalian/desktop/goodyear/Goodyear w derotation.sav"
+ExcelOutPath<-"/users/hragbalian/desktop/goodyear/new test OUT.xlsx"
 
+
+p2p_wrap(SeqDataPath=SeqDataPath,
+	DFA=T,
+	tpLabels=tpLabels,
+	ExcelOutPath=ExcelOutPath)
+	
 
 #' Path to purchase wrapper
 #'
@@ -9,13 +18,16 @@
 
 #' @export
 
-p2pWrap<-function(
-			SeqDataPath,			# Path to spss sequence data, should be cleaned if there's any cleaning that it needs, first column should contain ids
-			DFA = FALSE,			# Should we build a classification algorithm based
-			CapSeqLength = 20,		# Should we cap the length of sequences, if so, enter numeric
-			SingleState= FALSE,		# Should sequences be defined by single state transitions, or allow the same event type to repeat multiple in a row
-			HowManyClusters<-5:10,	# A range or scalar to return cluster solutions
-			costMatrix=NULL			# the square indel cost matrix for each type state
+p2p_wrap<-function(SeqDataPath,				# Path to spss sequence data, should be cleaned if there's any cleaning that it needs, first column should contain ids
+			DFA = FALSE,				# Should we build a classification algorithm based
+			CapSeqLength = 20,			# Should we cap the length of sequences, if so, enter numeric
+			SingleState= FALSE,			# Should sequences be defined by single state transitions, or allow the same event type to repeat multiple in a row
+			HowManyClusters=5:10,		# A range or scalar to return cluster solutions
+			costMatrix=NULL,			# the square indel cost matrix for each type state
+			tpLabels=NULL,				# A character vector of the touchpoint labels
+			OtherProfileBinariesPath=NULL, # A path to an SPSS file that contains profile variable binaries, first column should be IDs.
+			ExcelOutPath=NULL,
+			ConvertOutToSPSS=TRUE		# Convert output to an SPSS conformable means table?
 		)
 	{
 	
@@ -24,7 +36,6 @@ p2pWrap<-function(
 	library(TraMineR)
 	library(foreign)
 	library(cluster)
-	library(WriteXLS)
 	library(MASS)
 	library(klaR)
 	
@@ -105,6 +116,7 @@ p2pWrap<-function(
 			Data<-Data[,c(1:(CapSeqLength+1))]
 			}
 	
+	maxtpCode=max(Data[,-1],na.rm=T)
 	
 	# Start building sequences
 		if (!is.null(CapSeqLength)) SeqData<-seqdef(Data,var=colnames(Data)[2:(CapSeqLength+1)])
@@ -178,7 +190,15 @@ p2pWrap<-function(
 				KeepFromStep<-gsub("DFAData","",as.character(StepDFA[[1]]$vars))
 				
 				# build model with gathered information
-				eval(parse(text=paste("AccTable<-table(cluster",HowManyClusters[hmc],",predict(lda(cluster",HowManyClusters[hmc],"~DFAData[,KeepFromStep]))$class)",sep="")))
+				eval(parse(text=paste("testModel<-lda(cluster",HowManyClusters[hmc],"~DFAData[,KeepFromStep])",sep="")))
+				
+				# store DFA versin of cluster
+				eval(parse(text=paste("DFA_cluster",HowManyClusters[hmc],"<-predict(testModel)$class",sep="")))
+				
+				# retrieve cross table, predicted vs observed
+				eval(parse(text=paste("AccTable<-table(cluster",HowManyClusters[hmc],",DFA_cluster",HowManyClusters[hmc],")",sep="")))
+				
+				# retrieve % accuracy
 				clusterModelAccuracy[[paste("cluster",HowManyClusters[hmc],sep="")]]<-sum(diag(AccTable))/sum(AccTable)
 			
 				# store coefficients
@@ -193,97 +213,112 @@ p2pWrap<-function(
 	## Report the various profiles on the clusters ##	
 	#################################################	
 		
-		ClusterNames<-paste("cluster",HowManyClusters,sep="")
+		if (!DFA) ClusterNames<-paste("cluster",HowManyClusters,sep="")
+		if (DFA) ClusterNames<-paste("DFA_cluster",HowManyClusters,sep="")
+		if (ConvertOutToSPSS) SPSSOut<-list()
 		
+		BindedTablesStore<-list()
 		
-		
+		for (cN in ClusterNames) {
+			
+			currSol<-eval(parse(text=cN))
+			maxCurrSol<-max(as.numeric(as.character(currSol)))
+			
+			FirstList<-list()
+			LastList<-list()
+			TotalList<-list()
+			TransitionList<-list()
+			
+			BaseSizes<-list()
+			for (rNg in 1:(maxCurrSol+1)) {
 				
+				if (rNg<=maxCurrSol) currClusSeqs<-SeqData[which(currSol==rNg),]
+				if (rNg==(maxCurrSol+1)) currClusSeqs<-SeqData
+				
+				BaseSizes[[rNg]]<-dim(currClusSeqs)[1]
+				
+				currClusSeqsLength<-seqlength(currClusSeqs)
+
+				# First and Last event
+				FirstEventTable<-round(table(factor(currClusSeqs[,1],levels=1:maxtpCode))/dim(currClusSeqs)[1],digits=5)
+				LastEventTable<-matrix(,ncol=1,nrow=length(currClusSeqsLength))
+					for (i in 1:length(currClusSeqsLength)) LastEventTable[i]<-currClusSeqs[i,currClusSeqsLength[i]]
+					LastEventTable<-table(factor(LastEventTable,levels=1:maxtpCode))/dim(currClusSeqs)[1]
+				
+				# Total frequency
+				TotalPercent<-seqstatf(currClusSeqs)$Percent/100
+				
+				# Transition rates
+				TransitionRate<-matrix(t(seqtrate(currClusSeqs)))
+				rownames(TransitionRate)<-matrix(t(seqetm(currClusSeqs)))
+				
+				# Store
+				FirstList[[rNg]]<-FirstEventTable
+				LastList[[rNg]]<-LastEventTable
+				TotalList[[rNg]]<-TotalPercent
+				TransitionList[[rNg]]<-TransitionRate
+				
+				}
+				
+				# Store
+				FirstStore<-as.data.frame(Reduce("cbind",FirstList))
+					rownames(FirstStore)<-paste("FEV",1:length(tpLabels)," ",tpLabels,sep="")
+					colnames(FirstStore)<-c(paste("JourneyType_",1:maxCurrSol,sep=""),"Total")
+				LastStore<-as.data.frame(Reduce("cbind",LastList))
+					rownames(LastStore)<-paste("LEV",1:length(tpLabels)," ",tpLabels,sep="")
+					colnames(LastStore)<-c(paste("JourneyType_",1:maxCurrSol,sep=""),"Total")
+				TotalStore<-as.data.frame(Reduce("cbind",TotalList))
+					rownames(TotalStore)<-paste("TEV",1:length(tpLabels)," ",tpLabels,sep="")
+					colnames(TotalStore)<-c(paste("JourneyType_",1:maxCurrSol,sep=""),"Total")
+				TransitionStore<-as.data.frame(Reduce("cbind",TransitionList))
+					colnames(TransitionStore)<-c(paste("JourneyType_",1:maxCurrSol,sep=""),"Total")
+				
+				# process labels
+				TransSplit<-strsplit(rownames(TransitionStore),">","")
+				for (i in 1:length(TransSplit)) TransSplit[[i]]<-paste(tpLabels[as.numeric(TransSplit[[i]])],collapse=">")
+				rownames(TransitionStore)<-paste("TRA",1:length(unlist(TransSplit))," ",unlist(TransSplit),sep="")
+			
+				# Bind the tables together		
+				BindedTables<-rbind(FirstStore,LastStore,TotalStore,TransitionStore)
+				BindedTablesStore[[cN]]<-BindedTables
+			
+
+			# If convert to SPSS out is specified, convert the means table to SPSS conformable
+		
+				if (ConvertOutToSPSS) {
+					Out<-list()
+					for (j in 1:dim(BindedTables)[2]) Out[[j]]<-cbind(BindedTables[,j],BaseSizes[[j]],0)
+					Out<-Reduce("cbind",Out)
+					rownames(Out)<-rownames(BindedTables)
+					
+					BlankRow<-rep("",(maxCurrSol+1)*3)
+					SecondRow<-BlankRow
+						SecondRow[1]<-cN
+					ThirdRow<-BlankRow
+						ThirdRow[seq(1,(maxCurrSol+1)*3,by=3)]<-c(1:maxCurrSol,"Total")
+			
+					FourthRow<-rep(c("Mean","N","Std. Deviation"),maxCurrSol+1)
+		
+					StoreMeans<-rbind(BlankRow,SecondRow,ThirdRow,FourthRow,Out)
+		
+					rownames(StoreMeans)[1:4]<-c("Report","a","b","c")
+					colnames(StoreMeans)<-BlankRow
+					
+					SPSSOut[[cN]]<-StoreMeans
+				}
+		
+		}
+		
+		
+		if (!is.null(ExcelOutPath))	{
+			library(WriteXLS)
+			for (spj in 1:length(SPSSOut)) eval(parse(text=paste("SPSS",ClusterNames[spj],"<-as.data.frame(SPSSOut[[spj]])",sep="")))
+			WriteXLS(paste("SPSS",ClusterNames,sep=""),ExcelOutPath,row.names=T,col.names=F)
+			}
+			
+		Return<-list()
+			Return[["Main Table"]]<-BindedTablesStore
+			if (ConvertOutToSPSS) Return[["SPSS Main Table"]]<-SPSSOut
+			return(Return)		
 	}
 
-
-
-# Example
-#SeqDataPath = "/users/hragbalian/desktop/goodyear/Goodyear w derotation.sav"
-#Data<-Data[,-2]
-
-
-
-	
-	
-	
-
-
-	
-#	IDsWithCodes<-cbind(Data[-(Which1),1],clusterK)
-#		colnames(IDsWithCodes)<-c("Serial","Cluster")
-#		IDsWithCodes<-as.data.frame(IDsWithCodes)
-	
-#	SingleStepIDsWithCodes<-cbind(Data[Which1,1],dssSeqDataSingle)
-#	colnames(SingleStepIDsWithCodes)<-"Serial"
-#	SingleStepIDsWithCodes<-as.data.frame(SingleStepIDsWithCodes)
-	
-#	WriteXLS(c("SeqType1df","SeqType2df","SeqType3df","SeqType4df",
-#			"ProtoType1","ProtoType2","ProtoType3","ProtoType4",
-#			"TransType1","TransType2","TransType3","TransType4",
-#			"IDsWithCodes","SingleStepIDsWithCodes"),
-#		paste(Directory,"Sequence Typing.xlsx",sep=""),row.names=T)
-
-
-
-
-# Follow ups.
-#NewData<-read.spss("/users/hragbalian/desktop/goodyear/Goodyear Follow Up Sequence Data.sav", use.value.labels = F, to.data.frame = T)
-#NewData<-NewData[-which(apply(NewData[,-c(1,2)],1,function(x) all(is.na(x)))),]
-#NewData<-NewData[which(apply(NewData[,-c(1,71)],1,function(x) table(!is.na(x))[2]<=20)),]
-#NewData<-NewData[,1:21]
-
-#SeqNewData<-seqdef(NewData,var=colnames(NewData)[2:21])
-#dssSeqNewData<-seqdss(SeqNewData)
-#dssSeqNewData<-dssSeqNewData[,1:19]
-
-
-
-
-	# Add proto sequences from original analysis 
-#	dssSeqNewData<-rbind(ProtoType1[1,],ProtoType2[1,],ProtoType3[1,],ProtoType4[1,],dssSeqNewData)
-
-#	Distances<-seqdist(dssSeqNewData,method="OM",indel=1,norm=T,sm=Cost,with.missing=T)
-
-
-#	ClusterAssign<-apply(Distances[1:4,],2,which.min)
-#	ClusterAssign<-ClusterAssign[5:length(ClusterAssign)]
-	
-#	Return<-cbind(NewData$Respondent_Serial,ClusterAssign)
-	
-#	write.csv(Return,"/users/hragbalian/desktop/goodyear/Goodyear follow up - cluster assignments.csv")
-	
-
-
-# Second follow up. 
-#NewData2<-read.spss("/users/hragbalian/desktop/goodyear/Goodyear P2P round2 follow up.sav", use.value.labels = F, to.data.frame = T)
-#NewData2<-NewData2[-which(apply(NewData2[,-c(1,2)],1,function(x) all(is.na(x)))),]
-#NewData2<-NewData2[which(apply(NewData2[,-c(1,71)],1,function(x) table(!is.na(x))[2]<=20)),]
-#NewData2<-NewData2[,1:21]
-
-#SeqNewData2<-seqdef(NewData2,var=colnames(NewData2)[2:21])
-#dssSeqNewData2<-seqdss(SeqNewData2)
-#dssSeqNewData2<-dssSeqNewData2[,1:19]
-
-# Add proto sequences from original analysis 
-#	dssSeqNewData2<-rbind(ProtoType1[1,],ProtoType2[1,],ProtoType3[1,],ProtoType4[1,],dssSeqNewData2)
-
-#	Distances<-seqdist(dssSeqNewData2,method="OM",indel=1,norm=T,sm=Cost,with.missing=T)
-
-
-#	ClusterAssign<-apply(Distances[1:4,],2,which.min)
-#	ClusterAssign<-ClusterAssign[5:length(ClusterAssign)]
-	
-#	Return<-cbind(NewData2$Respondent_Serial,ClusterAssign)
-	
-	
-
-#	write.csv(Return,"/users/hragbalian/desktop/goodyear/Goodyear second follow up - cluster assignments.csv")
-
-
-
-    
