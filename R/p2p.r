@@ -1,33 +1,59 @@
 
 
-tpLabels=c("a","b","c","d","e","f","g","h","i","j","k","l","m","n")
-SeqDataPath<-"/users/hragbalian/desktop/goodyear/Goodyear w derotation.sav"
-ExcelOutPath<-"/users/hragbalian/desktop/goodyear/new test OUT.xlsx"
+SeqDataPath<-"/users/hragbalian/desktop/coty p2p/R151081_RAW Journey Data.sav"
+ExcelOutPath<-"/users/hragbalian/desktop/coty p2p/new test OUT.xlsx"
+OtherProfileBinariesPath="/users/hragbalian/desktop/coty p2p/Profile Variables.sav"
 
 
-p2p_wrap(SeqDataPath=SeqDataPath,
-	DFA=T,
-	tpLabels=tpLabels,
-	ExcelOutPath=ExcelOutPath)
+
+OUTPUT<-p2p_wrap(SeqDataPath=SeqDataPath,
+	DFA=TRUE,
+	CapSeqLength = 20,
+	SingleState=FALSE,
+	HowManyClusters=5:6,
+	costMatrix=NULL,
+	ConvertOutToSPSS=TRUE,
+	ExcelOutPath=ExcelOutPath,
+	OtherProfileBinariesPath=OtherProfileBinariesPath,
+	Group=list("DV_Category_PipeIn",1))
 	
 
 #' Path to purchase wrapper
 #'
+#' @param SeqDataPath A Character vector to an SPSS data file, Path to spss sequence 
+#' data, should be cleaned if there's any cleaning that it needs, first column should contain ids.
 #' 
-
+#' @param DFA A logical. Default is True.  Should the cluster be based off of a DFA algorithm. If 
+#' False, then cluster is derived from the ward hierarchical clustering algorithm. The DFA
+#' algorithm is based off 4 characteristics of sequences: First event, Last event, 
+#' frequency of each event type, and the presence/frequency of the top 10 common subsequences
+#' for each cluster type. If DFA is True, additional information is released in the return
+#' statement to reproduce the clusters. 
+#'
+#' @param CapSeqLength A numeric. Identifies how many events to cap sequences by, if any. 
+#'
+#' @param SingleState A logical. Should sequences be defined by single state transitions, or 
+#' allow the same event type to repeat multiple in a row.
+#'
+#' @param HowManyClusters A numeric vector or scalar. Iterates through cluster solution sizes. 
+#' default is 5:10.
+#' 
+#' @param costMatrix An nxn cost matrix, overriding the default costs. 
+#' 
+#' @param tpLabels
 
 #' @export
 
-p2p_wrap<-function(SeqDataPath,				# Path to spss sequence data, should be cleaned if there's any cleaning that it needs, first column should contain ids
-			DFA = FALSE,				# Should we build a classification algorithm based
-			CapSeqLength = 20,			# Should we cap the length of sequences, if so, enter numeric
-			SingleState= FALSE,			# Should sequences be defined by single state transitions, or allow the same event type to repeat multiple in a row
-			HowManyClusters=5:10,		# A range or scalar to return cluster solutions
-			costMatrix=NULL,			# the square indel cost matrix for each type state
-			tpLabels=NULL,				# A character vector of the touchpoint labels
+p2p_wrap<-function(SeqDataPath,		
+			DFA = TRUE,				
+			CapSeqLength = 20,
+			SingleState= FALSE,			
+			HowManyClusters=5:10,		
+			costMatrix=NULL,
 			OtherProfileBinariesPath=NULL, # A path to an SPSS file that contains profile variable binaries, first column should be IDs.
 			ExcelOutPath=NULL,
-			ConvertOutToSPSS=TRUE		# Convert output to an SPSS conformable means table?
+			ConvertOutToSPSS=TRUE,		# Convert output to an SPSS conformable means table?
+			Group=NULL				# Either Null, or a two slot list, one with variable name, one with variable value to select on, e.g. list("DV_Category_PipeIn",2)
 		)
 	{
 	
@@ -38,6 +64,7 @@ p2p_wrap<-function(SeqDataPath,				# Path to spss sequence data, should be clean
 	library(cluster)
 	library(MASS)
 	library(klaR)
+	library(igraph)
 	
 	# Load custom functions
 	# Extract the classification coefficients  
@@ -107,6 +134,17 @@ p2p_wrap<-function(SeqDataPath,				# Path to spss sequence data, should be clean
 	message("Loading in data")
 	suppressWarnings(Data<-read.spss(SeqDataPath, use.value.labels = F, to.data.frame = T))
 	
+	# retrieve event type labels
+	tpLabels<-names(attr(Data[,2],"value.labels"))[order(as.numeric(attr(Data[,2],"value.labels")))]
+	
+	
+	if (!is.null(Group)) { 
+		# Validate the Group
+		if (!is.character(Group[[1]]) || !is.numeric(Group[[2]])) stop("Check your Group object: first slot should be character, second slot numeric")
+		Data<-Data[Data[,Group[[1]]]==Group[[2]],]
+		}
+	
+	
 		# Remove rows with only missing data
 		if (length(which(apply(Data[,-c(1,2)],1,function(x) all(is.na(x)))))>0) Data<-Data[-which(apply(Data[,-c(1,2)],1,function(x) all(is.na(x)))),]
 	
@@ -116,7 +154,11 @@ p2p_wrap<-function(SeqDataPath,				# Path to spss sequence data, should be clean
 			Data<-Data[,c(1:(CapSeqLength+1))]
 			}
 	
-	maxtpCode=max(Data[,-1],na.rm=T)
+		# Record the ids of everyone who remains
+		IDs<-Data[,1]
+	
+		# Retrieve the max code for the touchpoints
+		maxtpCode=max(Data[,-1],na.rm=T)
 	
 	# Start building sequences
 		if (!is.null(CapSeqLength)) SeqData<-seqdef(Data,var=colnames(Data)[2:(CapSeqLength+1)])
@@ -133,6 +175,7 @@ p2p_wrap<-function(SeqDataPath,				# Path to spss sequence data, should be clean
 			# Truncate sequences to those that are multi-step and those that are single step
 			SeqDataSingle<-SeqData[Which1,] # can return this later
 			SeqData<-SeqData[-(Which1),]
+			IDs<-IDs[-(Which1)]
 			}
 
 	###############################	
@@ -161,38 +204,76 @@ p2p_wrap<-function(SeqDataPath,				# Path to spss sequence data, should be clean
 			FirstEvent<-CreateDummy(SeqData[,1],"FirstEvent")
 			LastEvent<-matrix(,ncol=1,nrow=length(Length))
 				for(i in 1:length(Length)) LastEvent[i]<-SeqData[i,Length[i]]
+				if (length(table(LastEvent))==1) for(i in 1:length(Length)) LastEvent[i]<-SeqData[i,Length[i]-1]
 				LastEvent<-CreateDummy(LastEvent,"LastEvent")
 			CountOfEachEvent<-seqistatd(SeqData)
+				colnames(CountOfEachEvent)<-paste("CountOfEventType",colnames(CountOfEachEvent),sep="")
 			
+			# Check for any constants and remove them
+			anyConstant<-any(apply(CountOfEachEvent,2,var)==0)
+			if (anyConstant) CountOfEachEvent<-CountOfEachEvent[,-which(apply(CountOfEachEvent,2,var)==0)]
+			
+			# Remove highly correlated variables at > .6
+				#DFAData<-cbind(FirstEvent,LastEvent,CountOfEachEvent,SubSeqPresenceType)
+				DFAData<-cbind(FirstEvent,LastEvent,CountOfEachEvent)
+				corDFAData<-cor(DFAData)
+				diag(corDFAData)<-0
+				cordumDFAData<-matrix(0,dim(corDFAData)[1],dim(corDFAData)[2])
+					colnames(cordumDFAData)<-colnames(corDFAData)
+					rownames(cordumDFAData)<-colnames(corDFAData)
+				cordumDFAData[abs(corDFAData)>.6]<-1
+					corGraph<-graph_from_adjacency_matrix(cordumDFAData)
+					corGraph<-as_edgelist(corGraph)
+
+				# randomly remove one of the problematic pairs
+				DFAData<-DFAData[,-which(colnames(DFAData)%in%apply(corGraph,1,sample,size=1))]
+			
+		
 			clusterModelAccuracy<-list()
 			clusterModelCoefs<-list()
+			clusterSubSeqs<-list()
 			for (hmc in 1:length(HowManyClusters)) {
 				
 				message(paste("Evaluating DFA for cluster",HowManyClusters[hmc],sep=""))
 				
 				# Check to see if any given sequence has a "common" subsequence of any given type
 				# The check will need to be returned
-				storeSubSeqMatch<-list()
-				for (cl in 1:HowManyClusters[hmc]) {
-					eval(parse(text=paste("baseObject<-seqefsub(seqecreate(SeqData[cluster",HowManyClusters[hmc],"%in%",cl,",]),minSupport=50)",sep="")))
-					baseObject$seqe<-seqefsub(seqecreate(SeqData),minSupport=50)$seqe
-		
-					subseqCountCheck<-seqeapplysub(baseObject,method="presence")
-					storeSubSeqMatch[[paste("cluster",cl,"of",HowManyClusters[hmc],sep="")]]<-apply(subseqCountCheck,1,sum)
-					}
-		
-				SubSeqPresenceType<-Reduce("cbind",storeSubSeqMatch)
-				colnames(SubSeqPresenceType)<-names(storeSubSeqMatch)
+				#storeSubSeqMatch<-list()
+				#storeClustSubSeq<-list()
+				#SeqEData<-seqecreate(SeqData) # Initialize event sequence data
 				
-				DFAData<-cbind(FirstEvent,LastEvent,CountOfEachEvent,SubSeqPresenceType)
+				#for (cl in 1:HowManyClusters[hmc]) {
+				#	eval(parse(text=paste("baseObject<-seqefsub(seqecreate(SeqData[cluster",HowManyClusters[hmc],"%in%",cl,",]),minSupport=2)",sep="")))
+				#	if (length(baseObject$subseq)>10) {
+				#		baseObject$subseq<-baseObject$subseq[1:10] # keep top 10 subseqs for the cluster
+				#		baseObject$data<-baseObject$data[1:10,]
+				#		}
+					
+				#	subseqCountCheck<-seqeapplysub(baseObject,method="presence")
+					
+				#	match(rownames(subseqCountCheck),unlist(lapply(unlist(SeqEData),as.character)))
+					
+				#	storeClustSubSeq[[paste("SubSeqFromCluster",cl,sep="")]]<-as.character(baseObject$subseq)
+				#	storeSubSeqMatch[[paste("SubSeqCountFromCluster",cl,sep="")]]<-apply(subseqCountCheck,1,sum)
+				#	}
 				
+				#storeClustSubSeq<-lapply(storeClustSubSeq , function(x) c(x,rep(NA,10-length(x))))
+				#storeClustSubSeq<-Reduce("rbind",lapply(storeClustSubSeq,as.character))
+				#	rownames(storeClustSubSeq)<-paste("TopSubSeqForClust",1:HowManyClusters[hmc],sep="")
+				#	clusterSubSeqs[[paste("cluster",HowManyClusters[hmc],sep="")]]<-storeClustSubSeq
+					
+				#SubSeqPresenceType<-Reduce("cbind",storeSubSeqMatch)
+				#colnames(SubSeqPresenceType)<-names(storeSubSeqMatch)
+					
+						
+								
 				eval(parse(text=paste("StepDFA<-greedy.wilks(cluster",HowManyClusters[hmc],"~DFAData)",sep="")))
 				KeepFromStep<-gsub("DFAData","",as.character(StepDFA[[1]]$vars))
 				
 				# build model with gathered information
 				eval(parse(text=paste("testModel<-lda(cluster",HowManyClusters[hmc],"~DFAData[,KeepFromStep])",sep="")))
 				
-				# store DFA versin of cluster
+				# store DFA version of cluster
 				eval(parse(text=paste("DFA_cluster",HowManyClusters[hmc],"<-predict(testModel)$class",sep="")))
 				
 				# retrieve cross table, predicted vs observed
@@ -208,22 +289,50 @@ p2p_wrap<-function(SeqDataPath,				# Path to spss sequence data, should be clean
 			
 				}
 			}
-		
+			
 	#################################################
 	## Report the various profiles on the clusters ##	
 	#################################################	
 		
+		# Import and process OtherProfileBinariesPath, if included
+		if (!is.null(OtherProfileBinariesPath)) {
+				suppressWarnings(OthProfileData<-read.spss(OtherProfileBinariesPath, use.value.labels = F, to.data.frame = T))
+				OPLabels<-as.character(attr(OthProfileData,"variable.labels"))
+				
+				FilteredProfileData<-OthProfileData[match(IDs,OthProfileData[,1]),]
+				FilteredProfileData<-FilteredProfileData[-1]
+				OPVarNames<-colnames(FilteredProfileData)
+				OPLabels<-OPLabels[-1]
+				}
+				
 		if (!DFA) ClusterNames<-paste("cluster",HowManyClusters,sep="")
 		if (DFA) ClusterNames<-paste("DFA_cluster",HowManyClusters,sep="")
 		if (ConvertOutToSPSS) SPSSOut<-list()
 		
 		BindedTablesStore<-list()
 		
+		storeProto<-list()
+		storeClusterSolutions<-list()
+		
 		for (cN in ClusterNames) {
+			
+			## Compute means for profiling
 			
 			currSol<-eval(parse(text=cN))
 			maxCurrSol<-max(as.numeric(as.character(currSol)))
+			storeClusterSolutions[[cN]]<-cbind(IDs,currSol)
 			
+			## Identify PROTOTYPICAL sequences
+			
+			DistanceFromCenter<-disscenter(Distances,currSol)
+			DistanceFromCenter[which(currSol==1)]
+			
+			tempStoreProto<-list()
+			for (rNg in 1:maxCurrSol) tempStoreProto[[rNg]]<-unique(head(SeqData[currSol%in%rNg,][order(DistanceFromCenter[currSol%in%rNg]),],20))
+			storeProto[[paste("cluster",cN,sep="")]]<-tempStoreProto
+			
+			
+			# ... continue with profiling	
 			FirstList<-list()
 			LastList<-list()
 			TotalList<-list()
@@ -243,6 +352,7 @@ p2p_wrap<-function(SeqDataPath,				# Path to spss sequence data, should be clean
 				FirstEventTable<-round(table(factor(currClusSeqs[,1],levels=1:maxtpCode))/dim(currClusSeqs)[1],digits=5)
 				LastEventTable<-matrix(,ncol=1,nrow=length(currClusSeqsLength))
 					for (i in 1:length(currClusSeqsLength)) LastEventTable[i]<-currClusSeqs[i,currClusSeqsLength[i]]
+					if (var(LastEventTable)==0) for (i in 1:length(currClusSeqsLength)) LastEventTable[i]<-currClusSeqs[i,currClusSeqsLength[i]-1]
 					LastEventTable<-table(factor(LastEventTable,levels=1:maxtpCode))/dim(currClusSeqs)[1]
 				
 				# Total frequency
@@ -282,34 +392,66 @@ p2p_wrap<-function(SeqDataPath,				# Path to spss sequence data, should be clean
 				BindedTables<-rbind(FirstStore,LastStore,TotalStore,TransitionStore)
 				BindedTablesStore[[cN]]<-BindedTables
 			
-
-			# If convert to SPSS out is specified, convert the means table to SPSS conformable
-		
-				if (ConvertOutToSPSS) {
-					Out<-list()
-					for (j in 1:dim(BindedTables)[2]) Out[[j]]<-cbind(BindedTables[,j],BaseSizes[[j]],0)
-					Out<-Reduce("cbind",Out)
-					rownames(Out)<-rownames(BindedTables)
-					
-					BlankRow<-rep("",(maxCurrSol+1)*3)
-					SecondRow<-BlankRow
-						SecondRow[1]<-cN
-					ThirdRow<-BlankRow
-						ThirdRow[seq(1,(maxCurrSol+1)*3,by=3)]<-c(1:maxCurrSol,"Total")
+				
+			###########################################################################################
+			## If there are additional profile variables to append, add those and obtain their means ##
+			###########################################################################################
 			
-					FourthRow<-rep(c("Mean","N","Std. Deviation"),maxCurrSol+1)
-		
-					StoreMeans<-rbind(BlankRow,SecondRow,ThirdRow,FourthRow,Out)
-		
-					rownames(StoreMeans)[1:4]<-c("Report","a","b","c")
-					colnames(StoreMeans)<-BlankRow
+			if (!is.null(OtherProfileBinariesPath)) {	
+				#temp data
+				#OthProfileData<-as.data.frame(cbind(Data[,1],matrix(sample(c(0,1),dim(Data)[1]*dim(Data)[2],replace=T,prob=c(.8,.2)),nrow=dim(Data)[1],ncol=dim(Data)[2])))
+	
+				storeOtherProfileMeans<-list()
+				for (op in 1:dim(FilteredProfileData)[2]){
+					eval(parse(text=paste("storeOtherProfileMeans[[OPVarNames[op]]]<-tapply(FilteredProfileData[,op],",cN,",mean,na.rm=T)",sep="")))
+					}
+				
+				#Reduce
+				storeOtherProfileMeans<-Reduce("rbind",storeOtherProfileMeans)
+				storeOtherProfileMeans<-cbind(storeOtherProfileMeans,apply(FilteredProfileData,2,mean,na.rm=T))
+					rownames(storeOtherProfileMeans)<-paste(OPVarNames," ",OPLabels,sep="")
+					colnames(storeOtherProfileMeans)<-c(paste("JourneyType_",1:maxCurrSol,sep=""),"Total")
 					
-					SPSSOut[[cN]]<-StoreMeans
+				# append the means
+					BindedTables<-rbind(BindedTables,storeOtherProfileMeans)
+					BindedTablesStore[[cN]]<-rbind(BindedTablesStore[[cN]],storeOtherProfileMeans)
 				}
+			
+			
+				######################################################################################
+				## If convert to SPSS out is specified, convert the means table to SPSS conformable ##
+				######################################################################################
+					
+					if (ConvertOutToSPSS) {
+						Out<-list()
+						for (j in 1:dim(BindedTables)[2]) Out[[j]]<-cbind(BindedTables[,j],BaseSizes[[j]],0)
+						Out<-Reduce("cbind",Out)
+						rownames(Out)<-rownames(BindedTables)
+					
+						BlankRow<-rep("",(maxCurrSol+1)*3)
+						SecondRow<-BlankRow
+							SecondRow[1]<-cN
+						ThirdRow<-BlankRow
+							ThirdRow[seq(1,(maxCurrSol+1)*3,by=3)]<-c(1:maxCurrSol,"Total")
+			
+						FourthRow<-rep(c("Mean","N","Std. Deviation"),maxCurrSol+1)
 		
-		}
+						StoreMeans<-rbind(BlankRow,SecondRow,ThirdRow,FourthRow,Out)
+		
+						rownames(StoreMeans)[1:4]<-c("Report","a","b","c")
+						colnames(StoreMeans)<-BlankRow
+					
+						SPSSOut[[cN]]<-StoreMeans
+					}
+	
+		
+		} # close main cluster loop
 		
 		
+		############
+		## Return ##
+		############
+				
 		if (!is.null(ExcelOutPath))	{
 			library(WriteXLS)
 			for (spj in 1:length(SPSSOut)) eval(parse(text=paste("SPSS",ClusterNames[spj],"<-as.data.frame(SPSSOut[[spj]])",sep="")))
@@ -317,8 +459,142 @@ p2p_wrap<-function(SeqDataPath,				# Path to spss sequence data, should be clean
 			}
 			
 		Return<-list()
-			Return[["Main Table"]]<-BindedTablesStore
-			if (ConvertOutToSPSS) Return[["SPSS Main Table"]]<-SPSSOut
-			return(Return)		
+			Return[["MainTable"]]<-BindedTablesStore
+			Return[["Prototypes"]]<-storeProto
+			Return[["TPLabels"]]<-tpLabels
+			Return[["Solutions"]]<-storeClusterSolutions
+			if (ConvertOutToSPSS) Return[["SPSSMainTable"]]<-SPSSOut
+			if (DFA) {
+				Return[["DFACoefs"]]<-clusterModelCoefs
+				Return[["DFAModelAccuracy"]]<-clusterModelAccuracy
+				Return[["SubSeqsForDFA"]]<-clusterSubSeqs
+				}
+				
+		return(Return)		
 	}
+
+
+
+#' Survival based drivers for sequence data
+
+
+SPSSPath<-"/users/hragbalian/desktop/coty p2p/basic.sav" # should have both
+TPVarNames<-c(paste("Toucpoint_00",1:9,sep=""),paste("Toucpoint_0",10:50,sep=""))
+TimeVarNames<-c(paste("SliderVal_00",1:9,sep=""),paste("SliderVal_0",10:50,sep=""))
+
+
+Duration<-abs(floor(rnorm(57,mean=5,sd=2)))
+
+
+
+sequence_driver<-function(SPSSPath,
+	TPVarNames,
+	TimeVarNames,
+	DurationVarName,
+	DecayTime=35,
+	DecayRate=.95,
+	) 
+	{
+
+	# decay function
+	decay_func<-function(timelength,rate) {
+		vect<-1 
+		for (i in 2:timelength) vect<-c(vect,vect[length(vect)]*rate)
+		return(vect)
+		}
+
+	# Data read
+	suppressWarnings(Data<-read.spss(SPSSPath, use.value.labels = F, to.data.frame = T))
+	Duration<-Data[,DurationVarName]
+	
+	# Grab decay
+	Decay<-decay_func(DecayTime,DecayRate)
+	
+	MaxCode<-max(Data[,TPVarNames],na.rm=T)
+	MaxTime<-max(Data[,TimeVarNames],na.rm=T)
+	
+	storeRspMats<-list()
+	
+	########
+	## Start respondent loop
+	for (rsp in 1:dim(Data)[1]) {
+		
+		rspTP<-Data[rsp,TPVarNames]
+			rspTP<-rspTP[!is.na(rspTP)]
+		rspTime<-Data[rsp,TimeVarNames]
+			rspTime<-rspTime[!is.na(rspTime)]
+		
+		# Adjust all the times if the max time is not MaxTime
+		if (max(rspTime)!=MaxTime) {
+			adjustment<-MaxTime/max(rspTime)
+			rspTime<-floor(rspTime*adjustment)
+			if (max(rspTime)!=MaxTime) rspTime[length(rspTime)]<-MaxTime
+			}
+		
+		# Make the time slider into a proportion
+		rspTime<-rspTime/100
+
+		# Initialize time decaying object for each event type
+		rspMatrix<-matrix(0,nrow=Duration[rsp],ncol=MaxCode)
+	
+		# Map
+		Map<-Duration[rsp]*rspTime
+		
+		# Map floored - to be able to enter into matrix, add 1
+		MapFloored<-floor(Map)	
+		if (min(MapFloored)==0) MapFloored[MapFloored==0]<-1
+		
+		
+		# Store events
+		for (p in 1:length(MapFloored)) rspMatrix[MapFloored[p],rspTP[p]]<-rspMatrix[MapFloored[p],rspTP[p]]+1
+		
+		# Apply decay to event matrix
+		for (j in 1:dim(rspMatrix)[2]) {
+			# check to see if there are any events of this type
+				AnyNot0<-any(rspMatrix[,j]!=0)
+				if (AnyNot0) {
+					WhichNot0<-which(rspMatrix[,j]!=0)
+					if (!all(WhichNot0%in%dim(rspMatrix)[1])) {
+						storeEventDecay<-list()
+						for (wn0 in 1:length(WhichNot0)) {
+							initMat<-matrix(0,nrow=dim(rspMatrix)[1],ncol=1)
+							initMat[WhichNot0[wn0]]<-rspMatrix[WhichNot0[wn0],j]
+							if (WhichNot0[wn0]!=length(initMat)) {	
+								decayloc<-2
+								for (lp in 	(WhichNot0[wn0]+1):length(initMat)) {
+									initMat[lp]<-initMat[lp-1]*Decay[decayloc]
+									decayloc<-decayloc+1
+									}
+								}
+							#store initMat
+							storeEventDecay[[wn0]]<-initMat	
+							}
+							
+						rspMatrix[,j]<-apply(Reduce("cbind",storeEventDecay),1,sum)
+					} # close if whichnot doesn't equal the length of time
+				} 
+			} # close for j (the decay)
+		
+		# Add the duration variable to the matrix
+		rspMatrix<-cbind(rspMatrix,1:Duration[rsp])
+		
+		#Store the respondent matrix
+		storeRspMats[[rsp]]<-rspMatrix
+		
+		} # close the rsp loop (looping across respondents)
+	
+	### Reduce the data to a single data.frame
+		survivalData<-as.data.frame(Reduce("rbind",storeRspMats))
+		colnames(survivalData)<-c(paste("JourneyType_",1:MaxCode,sep=""),"Duration")
+	
+		survivalVars<-colnames(survivalData)
+	
+	### Estimate the survival model
+		eval(parse(text=paste("Model<-glm(",survivalVars[length(survivalVars)-1],"~.,survivalData,family='binomial')",sep="")))
+		
+		
+	}
+
+
+#timeData$JourneyType_28[timeData$JourneyType_28>0 & timeData$JourneyType_28<1]<-1
 
