@@ -10,14 +10,50 @@ OUTPUT<-p2p_wrap(SeqDataPath=SeqDataPath,
 	DFA=TRUE,
 	CapSeqLength = 20,
 	SingleState=FALSE,
-	HowManyClusters=5:6,
+	HowManyClusters=3:7,
 	costMatrix=NULL,
 	ConvertOutToSPSS=TRUE,
 	ExcelOutPath=ExcelOutPath,
 	OtherProfileBinariesPath=OtherProfileBinariesPath,
-	Group=list("DV_Category_PipeIn",1))
+	Group=list("DV_Category_PipeIn",2),
+	skewThreshold=.3)
 	
 
+
+	MeansTable<-TransitionStore
+
+	assigner<-function(MeansTable,RangeThresh) {
+				rownames(MeansTable)<-lapply(lapply(strsplit(rownames(MeansTable)," ",""),function(x) x[-1]),paste, collapse=" ")
+				store<-list(); for (go in 1:(dim(MeansTable)[2]-1)) store[[go]]<-""
+				Range<-apply(MeansTable[,1:(dim(MeansTable)[2]-1)],1,function(x) diff(range(x)))	
+				Candidates<-which(Range>RangeThresh)
+				tempMeansTable<-MeansTable[Candidates,1:(dim(MeansTable)[2]-1)]
+				MeansTableMaxes<-apply(tempMeansTable,1,max)
+				for (mtm in 1:dim(tempMeansTable)[1]) {
+					whichGroup<-which(tempMeansTable[mtm,]%in%MeansTableMaxes[mtm])
+					for (wg in 1:length(whichGroup)) {
+						if (store[[whichGroup[wg]]][1]!="") store[[whichGroup[wg]]]<-c(store[[whichGroup[wg]]],rownames(tempMeansTable)[mtm])
+						if (store[[whichGroup[wg]]][1]=="") store[[whichGroup[wg]]]<-rownames(tempMeansTable)[mtm]
+						}
+					}
+				return(store)
+			}
+
+
+
+	assigner<-function(MeansTable,Thresh) {
+		rownames(MeansTable)<-lapply(lapply(strsplit(rownames(MeansTable)," ",""),function(x) x[-1]),paste, collapse=" ")
+		store<-list(); storeMeans<-list()
+		
+		tempMeansTable<-MeansTable[,1:(dim(MeansTable)[2]-1)]
+
+		for (mtm in 1:dim(tempMeansTable)[2]) {
+			store[[mtm]]<-rownames(MeansTable[which(tempMeansTable[,mtm]>Thresh),])	
+			storeMeans[[mtm]]<-MeansTable[which(tempMeansTable[,mtm]>Thresh),mtm]
+			}
+		return(list(Arcs=store,ArcSizes=storeMeans))
+	}
+			
 #' Path to purchase wrapper
 #'
 #' @param SeqDataPath A Character vector to an SPSS data file, Path to spss sequence 
@@ -53,7 +89,8 @@ p2p_wrap<-function(SeqDataPath,
 			OtherProfileBinariesPath=NULL, # A path to an SPSS file that contains profile variable binaries, first column should be IDs.
 			ExcelOutPath=NULL,
 			ConvertOutToSPSS=TRUE,		# Convert output to an SPSS conformable means table?
-			Group=NULL				# Either Null, or a two slot list, one with variable name, one with variable value to select on, e.g. list("DV_Category_PipeIn",2)
+			Group=NULL,				# Either Null, or a two slot list, one with variable name, one with variable value to select on, e.g. list("DV_Category_PipeIn",2)
+			skewThreshold=.3
 		)
 	{
 	
@@ -65,6 +102,7 @@ p2p_wrap<-function(SeqDataPath,
 	library(MASS)
 	library(klaR)
 	library(igraph)
+	library(networkD3)
 	
 	# Load custom functions
 	# Extract the classification coefficients  
@@ -263,9 +301,7 @@ p2p_wrap<-function(SeqDataPath,
 				#	clusterSubSeqs[[paste("cluster",HowManyClusters[hmc],sep="")]]<-storeClustSubSeq
 					
 				#SubSeqPresenceType<-Reduce("cbind",storeSubSeqMatch)
-				#colnames(SubSeqPresenceType)<-names(storeSubSeqMatch)
-					
-						
+				#colnames(SubSeqPresenceType)<-names(storeSubSeqMatch)		
 								
 				eval(parse(text=paste("StepDFA<-greedy.wilks(cluster",HowManyClusters[hmc],"~DFAData)",sep="")))
 				KeepFromStep<-gsub("DFAData","",as.character(StepDFA[[1]]$vars))
@@ -313,6 +349,9 @@ p2p_wrap<-function(SeqDataPath,
 		
 		storeProto<-list()
 		storeClusterSolutions<-list()
+		masterStoreGraphs<-list()
+		masterStoreGraphTables<-list()
+		storeBaseSizes<-list()
 		
 		for (cN in ClusterNames) {
 			
@@ -325,7 +364,7 @@ p2p_wrap<-function(SeqDataPath,
 			## Identify PROTOTYPICAL sequences
 			
 			DistanceFromCenter<-disscenter(Distances,currSol)
-			DistanceFromCenter[which(currSol==1)]
+			#DistanceFromCenter[which(currSol==1)]
 			
 			tempStoreProto<-list()
 			for (rNg in 1:maxCurrSol) tempStoreProto[[rNg]]<-unique(head(SeqData[currSol%in%rNg,][order(DistanceFromCenter[currSol%in%rNg]),],20))
@@ -339,6 +378,7 @@ p2p_wrap<-function(SeqDataPath,
 			TransitionList<-list()
 			
 			BaseSizes<-list()
+			
 			for (rNg in 1:(maxCurrSol+1)) {
 				
 				if (rNg<=maxCurrSol) currClusSeqs<-SeqData[which(currSol==rNg),]
@@ -385,13 +425,57 @@ p2p_wrap<-function(SeqDataPath,
 				
 				# process labels
 				TransSplit<-strsplit(rownames(TransitionStore),">","")
-				for (i in 1:length(TransSplit)) TransSplit[[i]]<-paste(tpLabels[as.numeric(TransSplit[[i]])],collapse=">")
+				for (i in 1:length(TransSplit)) {
+					pasterwhich<-as.numeric(TransSplit[[i]])
+					if (length(pasterwhich)>1) TransSplit[[i]]<-paste(tpLabels[pasterwhich],collapse=">")
+					if (length(pasterwhich)==1) TransSplit[[i]]<-paste(tpLabels[pasterwhich],tpLabels[pasterwhich],sep=">")
+					}
 				rownames(TransitionStore)<-paste("TRA",1:length(unlist(TransSplit))," ",unlist(TransSplit),sep="")
 			
 				# Bind the tables together		
 				BindedTables<-rbind(FirstStore,LastStore,TotalStore,TransitionStore)
 				BindedTablesStore[[cN]]<-BindedTables
 			
+				# Piece sequence map together
+				FirstAssigned<-assigner(FirstStore,.1)
+				Assigned<-assigner(TransitionStore,skewThreshold)
+				
+				storeGraphs<-list()
+				storeGraphTables<-list()
+				
+				for (group in 1:maxCurrSol) {
+
+					Converted<-balialab::convert_edgelist(Reduce("rbind",strsplit(Assigned$Arcs[[group]], ">","")))
+				
+					Links<-as.data.frame(cbind(Converted$Numeric-1,1))
+						colnames(Links)<-c("from","to","value")
+					Nodes<-as.data.frame(cbind(Converted$Character,1,1))
+						colnames(Nodes)<-c("name","group","size")
+						Nodes$group<-factor(Nodes$group,levels=c(1:3))
+				
+					#assign start
+					Nodes$group[which(Nodes$name%in%FirstAssigned$Arcs[[group]])]<-3
+				
+					#assign size
+					Nodes$size<-TotalStore[match(Nodes$name,tpLabels),group]*100
+				
+					#assign arc sizes
+					Links$Value<-Assigned$ArcSizes[[group]]*100
+					
+					#consolidate tables
+					LinksNodes<-list(Links=Links,Nodes=Nodes)
+					storeGraphTables[[group]]<-LinksNodes
+					
+					storeGraphs[[group]]<-forceNetwork(Links,Nodes,Source = "from",
+						Target = "to", Value = "value", NodeID = "name",
+						Nodesize = "size",
+							 Group = "group",opacity = 1, charge=-1000,opacityNoHover=1,fontSize=10,zoom=TRUE)	
+					
+				}
+					
+				masterStoreGraphs[[cN]]<-storeGraphs
+				masterStoreGraphTables[[cN]]<-storeGraphTables
+				storeBaseSizes[[cN]]<-cbind(1:maxCurrSol,unlist(BaseSizes)[-length(unlist(BaseSizes))])
 				
 			###########################################################################################
 			## If there are additional profile variables to append, add those and obtain their means ##
@@ -463,6 +547,9 @@ p2p_wrap<-function(SeqDataPath,
 			Return[["Prototypes"]]<-storeProto
 			Return[["TPLabels"]]<-tpLabels
 			Return[["Solutions"]]<-storeClusterSolutions
+			Return[["Graphs"]]<-masterStoreGraphs
+			Return[["GraphTables"]]<-masterStoreGraphTables
+			Return[["BaseSizes"]]<-storeBaseSizes
 			if (ConvertOutToSPSS) Return[["SPSSMainTable"]]<-SPSSOut
 			if (DFA) {
 				Return[["DFACoefs"]]<-clusterModelCoefs
