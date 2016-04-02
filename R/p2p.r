@@ -1,59 +1,26 @@
 
-
-SeqDataPath<-"/users/hragbalian/desktop/coty p2p/R151081_RAW Journey Data.sav"
-ExcelOutPath<-"/users/hragbalian/desktop/coty p2p/new test OUT.xlsx"
+# Final model
 OtherProfileBinariesPath="/users/hragbalian/desktop/coty p2p/Profile Variables.sav"
-
-
-
-OUTPUT<-p2p_wrap(SeqDataPath=SeqDataPath,
-	DFA=TRUE,
+SeqDataPath<-"/users/hragbalian/desktop/coty p2p/Data/fragrance.sav"
+fragrance_Out<-p2p_wrap(SeqDataPath=SeqDataPath,
+	DFA=T,
 	CapSeqLength = 20,
-	SingleState=FALSE,
-	HowManyClusters=3:7,
+	SeqMinLength=4,
+	SingleState=TRUE,
+	HowManyClusters=25,
 	costMatrix=NULL,
 	ConvertOutToSPSS=TRUE,
-	ExcelOutPath=ExcelOutPath,
+	ExcelOutPath="/users/hragbalian/desktop/coty p2p/Fragrance Out.xlsx",
 	OtherProfileBinariesPath=OtherProfileBinariesPath,
-	Group=list("DV_Category_PipeIn",2),
-	skewThreshold=.3)
-	
-
-
-	MeansTable<-TransitionStore
-
-	assigner<-function(MeansTable,RangeThresh) {
-				rownames(MeansTable)<-lapply(lapply(strsplit(rownames(MeansTable)," ",""),function(x) x[-1]),paste, collapse=" ")
-				store<-list(); for (go in 1:(dim(MeansTable)[2]-1)) store[[go]]<-""
-				Range<-apply(MeansTable[,1:(dim(MeansTable)[2]-1)],1,function(x) diff(range(x)))	
-				Candidates<-which(Range>RangeThresh)
-				tempMeansTable<-MeansTable[Candidates,1:(dim(MeansTable)[2]-1)]
-				MeansTableMaxes<-apply(tempMeansTable,1,max)
-				for (mtm in 1:dim(tempMeansTable)[1]) {
-					whichGroup<-which(tempMeansTable[mtm,]%in%MeansTableMaxes[mtm])
-					for (wg in 1:length(whichGroup)) {
-						if (store[[whichGroup[wg]]][1]!="") store[[whichGroup[wg]]]<-c(store[[whichGroup[wg]]],rownames(tempMeansTable)[mtm])
-						if (store[[whichGroup[wg]]][1]=="") store[[whichGroup[wg]]]<-rownames(tempMeansTable)[mtm]
-						}
-					}
-				return(store)
-			}
+	skewThreshold=.2)
 
 
 
-	assigner<-function(MeansTable,Thresh) {
-		rownames(MeansTable)<-lapply(lapply(strsplit(rownames(MeansTable)," ",""),function(x) x[-1]),paste, collapse=" ")
-		store<-list(); storeMeans<-list()
+
+
+
+
 		
-		tempMeansTable<-MeansTable[,1:(dim(MeansTable)[2]-1)]
-
-		for (mtm in 1:dim(tempMeansTable)[2]) {
-			store[[mtm]]<-rownames(MeansTable[which(tempMeansTable[,mtm]>Thresh),])	
-			storeMeans[[mtm]]<-MeansTable[which(tempMeansTable[,mtm]>Thresh),mtm]
-			}
-		return(list(Arcs=store,ArcSizes=storeMeans))
-	}
-			
 #' Path to purchase wrapper
 #'
 #' @param SeqDataPath A Character vector to an SPSS data file, Path to spss sequence 
@@ -83,14 +50,17 @@ OUTPUT<-p2p_wrap(SeqDataPath=SeqDataPath,
 p2p_wrap<-function(SeqDataPath,		
 			DFA = TRUE,				
 			CapSeqLength = 20,
+			SeqMinLength = 3,
 			SingleState= FALSE,			
 			HowManyClusters=5:10,		
 			costMatrix=NULL,
 			OtherProfileBinariesPath=NULL, # A path to an SPSS file that contains profile variable binaries, first column should be IDs.
 			ExcelOutPath=NULL,
 			ConvertOutToSPSS=TRUE,		# Convert output to an SPSS conformable means table?
-			Group=NULL,				# Either Null, or a two slot list, one with variable name, one with variable value to select on, e.g. list("DV_Category_PipeIn",2)
-			skewThreshold=.3
+			#Group=NULL,					# Either Null, or a two slot list, one with variable name, one with variable value to select on, e.g. list("DV_Category_PipeIn",2). Creates sequences within the group. 
+			skewThreshold=.3,			# Threshold for skews to qualify as a connection in the journey map
+			CustomCluster=NULL,			# Nx2 dataframe, first column containing IDs, second column the labels. 
+			ReportBtwWithinPlot=TRUE
 		)
 	{
 	
@@ -102,7 +72,9 @@ p2p_wrap<-function(SeqDataPath,
 	library(MASS)
 	library(klaR)
 	library(igraph)
+	#library(baliaviz)
 	library(networkD3)
+	library(igraph)
 	
 	# Load custom functions
 	# Extract the classification coefficients  
@@ -167,7 +139,21 @@ p2p_wrap<-function(SeqDataPath,
 	
 	  }
 	
-	
+	# Assign Sequence moments to a given cluster.
+	assigner<-function(MeansTable,Thresh) 
+		{
+		rownames(MeansTable)<-lapply(lapply(strsplit(rownames(MeansTable)," ",""),function(x) x[-1]),paste, collapse=" ")
+		store<-list(); storeMeans<-list()
+		
+		tempMeansTable<-MeansTable[,1:(dim(MeansTable)[2]-1)]
+
+		for (mtm in 1:dim(tempMeansTable)[2]) {
+			store[[mtm]]<-rownames(MeansTable[which(tempMeansTable[,mtm]>Thresh),])	
+			storeMeans[[mtm]]<-MeansTable[which(tempMeansTable[,mtm]>Thresh),mtm]
+			}
+		return(list(Arcs=store,ArcSizes=storeMeans))
+	}
+		
 	# Load data
 	message("Loading in data")
 	suppressWarnings(Data<-read.spss(SeqDataPath, use.value.labels = F, to.data.frame = T))
@@ -176,19 +162,12 @@ p2p_wrap<-function(SeqDataPath,
 	tpLabels<-names(attr(Data[,2],"value.labels"))[order(as.numeric(attr(Data[,2],"value.labels")))]
 	
 	
-	if (!is.null(Group)) { 
-		# Validate the Group
-		if (!is.character(Group[[1]]) || !is.numeric(Group[[2]])) stop("Check your Group object: first slot should be character, second slot numeric")
-		Data<-Data[Data[,Group[[1]]]==Group[[2]],]
-		}
-	
-	
 		# Remove rows with only missing data
 		if (length(which(apply(Data[,-c(1,2)],1,function(x) all(is.na(x)))))>0) Data<-Data[-which(apply(Data[,-c(1,2)],1,function(x) all(is.na(x)))),]
 	
 		# If there's been a cap placed on sequence length, remove sequences greater than that cap
 		if (!is.null(CapSeqLength)) {
-			Data<-Data[which(apply(Data[,-1],1,function(x) table(!is.na(x))[2]<=CapSeqLength)),]
+			Data<-Data[which(apply(Data[,-1],1,function(x) table(!is.na(x))[2]<=CapSeqLength & table(!is.na(x))[2]>=SeqMinLength)),]
 			Data<-Data[,c(1:(CapSeqLength+1))]
 			}
 	
@@ -197,7 +176,8 @@ p2p_wrap<-function(SeqDataPath,
 	
 		# Retrieve the max code for the touchpoints
 		maxtpCode=max(Data[,-1],na.rm=T)
-	
+		TerminalEventLabel<-tpLabels[maxtpCode]
+		
 	# Start building sequences
 		if (!is.null(CapSeqLength)) SeqData<-seqdef(Data,var=colnames(Data)[2:(CapSeqLength+1)])
 		if (is.null(CapSeqLength)) SeqData<-seqdef(Data[,-1])
@@ -220,6 +200,8 @@ p2p_wrap<-function(SeqDataPath,
 	## Start of cluster analysis ##
 	###############################
 		
+	if (is.null(CustomCluster)) {
+		
 		if (is.null(costMatrix)) Cost<-seqsubm(SeqData, method = "CONSTANT", with.miss = TRUE)
 		
 		message("Calculating distances between paths")
@@ -228,13 +210,67 @@ p2p_wrap<-function(SeqDataPath,
 		message("Clustering paths")
 		clusterward <- agnes(Distances, diss = TRUE, method = "ward")
 
-		message(paste("Creating", HowManyClusters[1], "to",HowManyClusters[length(HowManyClusters)], "cluster groups"))
-		for (i in 1:length(HowManyClusters)) {
-			eval(parse(text=paste("cluster",HowManyClusters[i]," <- cutree(clusterward, k=", HowManyClusters[i],")",sep="")))
-			}
+		################################################
+		### Create within vs. between distance plot. ###
+		################################################
+		message("Generating Between vs. Within Cluster Distances Plot")
+		storeClusterDistances<-list()
 		
+			# Create plot metrics
+			DistWithin<-matrix(,ncol=1,nrow=length(1:50))
+			DisBtw<-matrix(,ncol=1,nrow=length(1:50))
+			for (i in 2:50) {
+				curCut<-cutree(clusterward, k=i)
+			
+				# Avg distance within
+				tempStore<-matrix(,ncol=1,nrow=i)
+				for (kk in 1:i) {
+					tempDist<-Distances[which(curCut==kk),which(curCut==kk)]
+					tempStore[kk]<-mean(tempDist[lower.tri(tempDist)])
+					}
+					DistWithin[i]<-mean(tempStore)
+			
+				# Distances between 
+				tempGroupDistances<-matrix(0,i,i)
+				for (kk1 in 1:i) {
+					for (kk2 in 1:i) {
+						if (kk1!=kk2) tempGroupDistances[kk1,kk2]<-mean(Distances[which(curCut==kk1),which(curCut==kk2)])
+						}
+					}
+					# Store the cluster distance matrix if its specified in HowManyClusters
+					if (any(i==HowManyClusters)) storeClusterDistances[[paste("cluster",i,"_dists",sep="")]]<-tempGroupDistances
+					DisBtw[i]<-mean(tempGroupDistances[lower.tri(tempGroupDistances)])
+				}
+		
+			# Look at rate of change of btw vs within cluster			
+			DiffBtwWith<-diff(DisBtw-DistWithin)
+			storeZ<-matrix(,ncol=1,nrow=length(DiffBtwWith))
+			for (ll in 2:length(DiffBtwWith)) {
+				storeZ[ll]<-(DiffBtwWith[ll]-mean(DiffBtwWith[1:ll],na.rm=T))/sd(DiffBtwWith[1:ll],na.rm=T)
+				}
+			
+			library(ggplot2)
+			plotData<-as.data.frame(cbind(DiffBtwWith,1:length(DiffBtwWith)))
+				colnames(plotData)<-c("Distances","Clusters")
+			plotter<-ggplot(plotData)
+			microClusterPlot<-plotter+geom_line(aes(x=Clusters,y=Distances))+
+				stat_smooth(aes(x=Clusters,y=Distances),se=F)+
+				ggtitle("Difference Between vs. Within Cluster Distances")
+				
+			
+		################################################
+		################################################
+		
+		# Use HowManyClusters to control the search space
+
+			if (is.null(HowManyClusters)) stop("Please specify the number(s) of cluster(s) you want to create")
+			message(paste("Creating", HowManyClusters[1], "to",HowManyClusters[length(HowManyClusters)], "cluster groups"))
+			for (i in 1:length(HowManyClusters)) {
+				eval(parse(text=paste("cluster",HowManyClusters[i]," <- cutree(clusterward, k=", HowManyClusters[i],")",sep="")))
+				}
+			
+			
 		# If DFA is true, generate an algorithm for each of the clustering solutions based on length, first event
-		
 		if (DFA) {
 			
 			# Retrieves indvidual-level measurements on the sequences
@@ -264,44 +300,17 @@ p2p_wrap<-function(SeqDataPath,
 					corGraph<-as_edgelist(corGraph)
 
 				# randomly remove one of the problematic pairs
-				DFAData<-DFAData[,-which(colnames(DFAData)%in%apply(corGraph,1,sample,size=1))]
+				DFAData<-DFAData[,-which(colnames(DFAData)%in%apply(corGraph,1,function(x) x[1]))]
 			
 		
 			clusterModelAccuracy<-list()
 			clusterModelCoefs<-list()
 			clusterSubSeqs<-list()
+			storeClusterDistances<-list()
 			for (hmc in 1:length(HowManyClusters)) {
 				
 				message(paste("Evaluating DFA for cluster",HowManyClusters[hmc],sep=""))
-				
-				# Check to see if any given sequence has a "common" subsequence of any given type
-				# The check will need to be returned
-				#storeSubSeqMatch<-list()
-				#storeClustSubSeq<-list()
-				#SeqEData<-seqecreate(SeqData) # Initialize event sequence data
-				
-				#for (cl in 1:HowManyClusters[hmc]) {
-				#	eval(parse(text=paste("baseObject<-seqefsub(seqecreate(SeqData[cluster",HowManyClusters[hmc],"%in%",cl,",]),minSupport=2)",sep="")))
-				#	if (length(baseObject$subseq)>10) {
-				#		baseObject$subseq<-baseObject$subseq[1:10] # keep top 10 subseqs for the cluster
-				#		baseObject$data<-baseObject$data[1:10,]
-				#		}
 					
-				#	subseqCountCheck<-seqeapplysub(baseObject,method="presence")
-					
-				#	match(rownames(subseqCountCheck),unlist(lapply(unlist(SeqEData),as.character)))
-					
-				#	storeClustSubSeq[[paste("SubSeqFromCluster",cl,sep="")]]<-as.character(baseObject$subseq)
-				#	storeSubSeqMatch[[paste("SubSeqCountFromCluster",cl,sep="")]]<-apply(subseqCountCheck,1,sum)
-				#	}
-				
-				#storeClustSubSeq<-lapply(storeClustSubSeq , function(x) c(x,rep(NA,10-length(x))))
-				#storeClustSubSeq<-Reduce("rbind",lapply(storeClustSubSeq,as.character))
-				#	rownames(storeClustSubSeq)<-paste("TopSubSeqForClust",1:HowManyClusters[hmc],sep="")
-				#	clusterSubSeqs[[paste("cluster",HowManyClusters[hmc],sep="")]]<-storeClustSubSeq
-					
-				#SubSeqPresenceType<-Reduce("cbind",storeSubSeqMatch)
-				#colnames(SubSeqPresenceType)<-names(storeSubSeqMatch)		
 								
 				eval(parse(text=paste("StepDFA<-greedy.wilks(cluster",HowManyClusters[hmc],"~DFAData)",sep="")))
 				KeepFromStep<-gsub("DFAData","",as.character(StepDFA[[1]]$vars))
@@ -323,9 +332,22 @@ p2p_wrap<-function(SeqDataPath,
 				rownames(tempCoefs)<-gsub("[]]","",gsub("[[, ]","",gsub("KeepFromStep","",gsub("DFAData","",rownames(tempCoefs)))))
 				clusterModelCoefs[[paste("cluster",HowManyClusters[hmc],sep="")]]<-tempCoefs
 			
+				# restore the cluster-level distances using DFA'ed groupings
+				
+				tempGroupDistances<-matrix(0,HowManyClusters[hmc],HowManyClusters[hmc])
+				for (kk1 in 1:HowManyClusters[hmc]) {
+					for (kk2 in 1:HowManyClusters[hmc]) {
+						if (kk1!=kk2) eval(parse(text=paste("tempGroupDistances[kk1,kk2]<-mean(Distances[which(DFA_cluster",HowManyClusters[hmc],"==kk1),which(DFA_cluster",HowManyClusters[hmc],"==kk2)])",sep="")))
+						}
+					}
+					# Store the cluster distance matrix if its specified in HowManyClusters
+					storeClusterDistances[[paste("DFA_cluster",HowManyClusters[hmc],"_dists",sep="")]]<-tempGroupDistances
+			
 				}
 			}
-			
+		}
+	
+		
 	#################################################
 	## Report the various profiles on the clusters ##	
 	#################################################	
@@ -341,8 +363,13 @@ p2p_wrap<-function(SeqDataPath,
 				OPLabels<-OPLabels[-1]
 				}
 				
-		if (!DFA) ClusterNames<-paste("cluster",HowManyClusters,sep="")
-		if (DFA) ClusterNames<-paste("DFA_cluster",HowManyClusters,sep="")
+		if (!DFA && is.null(CustomCluster)) ClusterNames<-paste("cluster",HowManyClusters,sep="")
+		if (DFA && is.null(CustomCluster)) ClusterNames<-paste("DFA_cluster",HowManyClusters,sep="")
+		if (!is.null(CustomCluster)) {
+			ClusterNames<-"CustomCluster"
+			CustomCluster<-CustomCluster[match(IDs,CustomCluster[,1]),2]
+			}
+		
 		if (ConvertOutToSPSS) SPSSOut<-list()
 		
 		BindedTablesStore<-list()
@@ -352,6 +379,13 @@ p2p_wrap<-function(SeqDataPath,
 		masterStoreGraphs<-list()
 		masterStoreGraphTables<-list()
 		storeBaseSizes<-list()
+		storeCompositeProtos<-list()
+		storeCompositeProtoDistances<-list()
+		storeSimplyCompositeProtoDistances<-list()
+		
+		storeStandCPSDists<-list()
+		storeStandClassAssign<-list()
+		storeCPSClassAssignProp<-list()
 		
 		for (cN in ClusterNames) {
 			
@@ -362,13 +396,116 @@ p2p_wrap<-function(SeqDataPath,
 			storeClusterSolutions[[cN]]<-cbind(IDs,currSol)
 			
 			## Identify PROTOTYPICAL sequences
+			if (is.null(CustomCluster)) {
+				DistanceFromCenter<-disscenter(Distances,currSol)
+				#DistanceFromCenter[which(currSol==1)]
 			
-			DistanceFromCenter<-disscenter(Distances,currSol)
-			#DistanceFromCenter[which(currSol==1)]
+				tempStoreProto<-list()
+				for (rNg in 1:maxCurrSol) {
+					currProto<-unique(head(SeqData[currSol%in%rNg,][order(DistanceFromCenter[currSol%in%rNg]),],20))
+					currProto<-apply(currProto,2,as.character)
+					storeCurrProto<-list()
+					if (!is.null(dim(currProto))) for (prt in 1:dim(currProto)[1]) storeCurrProto[[prt]] <-suppressWarnings(paste(tpLabels[as.numeric(currProto[prt,])][!is.na(tpLabels[as.numeric(currProto[prt,])])],collapse=">"))
+					if (is.null(dim(currProto))) storeCurrProto[[prt]] <-suppressWarnings(paste(tpLabels[as.numeric(currProto)][!is.na(tpLabels[as.numeric(currProto)])],collapse=">"))
+					tempStoreProto[[rNg]]<-unlist(storeCurrProto)
+					}
+				
+				storeProto[[paste("cluster",cN,sep="")]]<-tempStoreProto
+				}
 			
-			tempStoreProto<-list()
-			for (rNg in 1:maxCurrSol) tempStoreProto[[rNg]]<-unique(head(SeqData[currSol%in%rNg,][order(DistanceFromCenter[currSol%in%rNg]),],20))
-			storeProto[[paste("cluster",cN,sep="")]]<-tempStoreProto
+			# Map each prototype as a (temporally) directed graph - composite prototypes
+			AvgProtoSeqLength<-unlist(lapply(lapply(lapply(tempStoreProto,function(x) strsplit(x,">","")),function(x) lapply(x,length)),function(x) floor(mean(unlist(x)))))
+			CompositeProto<-list()
+			for (clu in 1:maxCurrSol) {
+				pieceCompProto<-list()
+				protoSplit<-lapply(tempStoreProto[[clu]],function(x) strsplit(x,">",""))
+				for (apsl in 1:AvgProtoSeqLength[clu]) {
+					tempTab<-table(unlist(lapply(protoSplit,function(x)x[[1]][apsl])))
+					namesTempTab<-names(tempTab)
+					maxTempTab<-max(tempTab)
+					tempNamesStore<-namesTempTab[which(tempTab%in%maxTempTab)]
+					if (any(tempNamesStore%in%TerminalEventLabel)) tempNamesStore<-tempNamesStore[-which(tempNamesStore%in%TerminalEventLabel)]
+					pieceCompProto[[apsl]]<-tempNamesStore
+					}
+					
+				# Put the purchase event as the last event, and remove it from any other slot
+				pieceCompProto[[length(pieceCompProto)+1]]<-TerminalEventLabel
+				if (any(unlist(lapply(pieceCompProto,length))==0)) pieceCompProto<-pieceCompProto[-which(unlist(lapply(pieceCompProto,length))==0)]
+				
+				#clean it out
+				for (cc in 1:(length(pieceCompProto)-1)) {
+					if (any(pieceCompProto[[cc]]%in%pieceCompProto[[cc+1]])) {
+						finder<-which(pieceCompProto[[cc+1]]%in%pieceCompProto[[cc]])
+						pieceCompProto[[cc+1]]<-pieceCompProto[[cc+1]][-finder]
+						}
+					}
+				if (any(unlist(lapply(pieceCompProto,length))==0)) pieceCompProto<-pieceCompProto[-which(unlist(lapply(pieceCompProto,length))==0)]
+	
+					
+				#piece edge list together
+				adder<-1
+				pieceCompProtoEdge<-list()
+				simplyCompProtoEdge<-list()
+				for (cc in 1:(length(pieceCompProto)-1)) {
+					for (pcp in 1:length(pieceCompProto[[cc]])) {
+							pieceCompProtoEdge[[adder]]<-paste(pieceCompProto[[cc]][pcp],pieceCompProto[[cc+1]],sep=">")
+							simplyCompProtoEdge[[adder]]<-paste(paste("(",1:length(pieceCompProto[[cc]][pcp]),") ",pieceCompProto[[cc]],sep=""),paste(" (",1:length(pieceCompProto[[cc+1]]),") ",pieceCompProto[[cc+1]],sep=""),sep=" >>> ",collapse="")
+							adder<-adder+1
+							}
+						}
+					
+				CompositeProto[[clu]]<-Reduce("rbind",strsplit(unlist(pieceCompProtoEdge),">",""))
+				if (length(CompositeProto[[clu]])==2) CompositeProto[[clu]]<-matrix(CompositeProto[[clu]],ncol=2,byrow=T)
+				}
+			
+			# Convert the character edgelist for mapping
+			storeCompositeProtos[[cN]]<-lapply(lapply(CompositeProto,balialab::convert_edgelist),function(x) list(Numeric=x$Numeric-1,Character=x$Character))
+			
+			# Identify distances between micro-clusters
+			tempGroupDistances<-matrix(0,maxCurrSol,maxCurrSol)
+			for (kk1 in 1:maxCurrSol) {
+				for (kk2 in 1:maxCurrSol) {
+					if (kk1!=kk2) tempGroupDistances[kk1,kk2]<-mean(Distances[which(currSol==kk1),which(currSol==kk2)])
+					}
+				}
+			
+			meanDist<-mean(tempGroupDistances[lower.tri(tempGroupDistances)])
+			sdDist<-sd(tempGroupDistances[lower.tri(tempGroupDistances)])
+			standDist<-round((tempGroupDistances-meanDist)/sdDist,digits=2)
+			diag(standDist)<-""
+			standDist[upper.tri(standDist)]<-""
+			standDist<-as.data.frame(standDist)
+			
+			CPSNames<-paste("cps",1:maxCurrSol,sep="")
+			colnames(standDist)<-CPSNames
+			rownames(standDist)<-CPSNames
+			
+			
+			# store it
+			storeStandCPSDists[[cN]]<-standDist
+			
+			# Explore the sequence class membership	(range of classes is automatically selected, around a 1/5 of the number of sequences
+			RangeClassesExplore<-ceiling(maxCurrSol/5):(ceiling(maxCurrSol/5)+ceiling(maxCurrSol/5))
+			tempStoreClassAssign<-matrix(,ncol=length(RangeClassesExplore),nrow=length(currSol))
+			tempTempStoreCPSClassAssignProp<-list()
+			for (rce in RangeClassesExplore) {
+				currClassMembership<-cutree(agnes(as.dist(tempGroupDistances), diss = TRUE, method = "ward"),k=rce)
+				tempStoreCPSClassAssignProp<-list()
+				for (tg in 1:rce) {
+					tempStoreClassAssign[which(currSol%in%which(currClassMembership%in%tg)),which(RangeClassesExplore%in%rce)]<-tg
+					tempTab<-table(currSol[currSol%in%which(currClassMembership%in%tg)])
+					tempStoreCPSClassAssignProp[[tg]]<-round(tempTab/sum(tempTab),digits=2)
+					}
+				colnames(tempStoreClassAssign)<-paste("numClasses",RangeClassesExplore,sep="")		
+				toStore<-Reduce("rbind",tempStoreCPSClassAssignProp)
+				rownames(toStore)<-paste("class",1:rce,sep="")
+				colnames(toStore)<-CPSNames
+				tempTempStoreCPSClassAssignProp[[rce]]<-toStore
+				}
+			
+			# store it
+			storeStandClassAssign[[cN]]<-tempStoreClassAssign
+			storeCPSClassAssignProp[[cN]]<-tempTempStoreCPSClassAssignProp
 			
 			
 			# ... continue with profiling	
@@ -448,7 +585,7 @@ p2p_wrap<-function(SeqDataPath,
 					Converted<-balialab::convert_edgelist(Reduce("rbind",strsplit(Assigned$Arcs[[group]], ">","")))
 				
 					Links<-as.data.frame(cbind(Converted$Numeric-1,1))
-						colnames(Links)<-c("from","to","value")
+						colnames(Links)<-c("source","target","value")
 					Nodes<-as.data.frame(cbind(Converted$Character,1,1))
 						colnames(Nodes)<-c("name","group","size")
 						Nodes$group<-factor(Nodes$group,levels=c(1:3))
@@ -457,20 +594,22 @@ p2p_wrap<-function(SeqDataPath,
 					Nodes$group[which(Nodes$name%in%FirstAssigned$Arcs[[group]])]<-3
 				
 					#assign size
-					Nodes$size<-TotalStore[match(Nodes$name,tpLabels),group]*100
+					Nodes$size<-(TotalStore[match(Nodes$name,tpLabels),group]*50)+1
 				
 					#assign arc sizes
-					Links$Value<-Assigned$ArcSizes[[group]]*100
+					Links$value<-Assigned$ArcSizes[[group]]*10
 					
 					#consolidate tables
 					LinksNodes<-list(Links=Links,Nodes=Nodes)
 					storeGraphTables[[group]]<-LinksNodes
 					
-					storeGraphs[[group]]<-forceNetwork(Links,Nodes,Source = "from",
-						Target = "to", Value = "value", NodeID = "name",
+					storeGraphs[[group]]<-forceNetwork(Links,Nodes,Source = "source",
+						Target = "target", Value = "value", NodeID = "name",
 						Nodesize = "size",
 							 Group = "group",opacity = 1, charge=-1000,opacityNoHover=1,fontSize=10,zoom=TRUE)	
 					
+					
+					#storeGraphs[[group]]<-forceNetwork(Links=Links,Nodes=Nodes)	
 				}
 					
 				masterStoreGraphs[[cN]]<-storeGraphs
@@ -544,7 +683,7 @@ p2p_wrap<-function(SeqDataPath,
 			
 		Return<-list()
 			Return[["MainTable"]]<-BindedTablesStore
-			Return[["Prototypes"]]<-storeProto
+			if (is.null(CustomCluster)) Return[["Prototypes"]]<-storeProto
 			Return[["TPLabels"]]<-tpLabels
 			Return[["Solutions"]]<-storeClusterSolutions
 			Return[["Graphs"]]<-masterStoreGraphs
@@ -556,7 +695,12 @@ p2p_wrap<-function(SeqDataPath,
 				Return[["DFAModelAccuracy"]]<-clusterModelAccuracy
 				Return[["SubSeqsForDFA"]]<-clusterSubSeqs
 				}
-				
+			if (ReportBtwWithinPlot) Return[["microClusterPlot"]]<-microClusterPlot
+			Return[["CompositeProtos"]]<-storeCompositeProtos
+			Return[["CPSDistances"]]<-storeStandCPSDists
+			Return[["ClassAssigned"]]<-storeStandClassAssign
+			Return[["ClassAssignProps"]]<-storeCPSClassAssignProp
+			
 		return(Return)		
 	}
 
@@ -565,33 +709,35 @@ p2p_wrap<-function(SeqDataPath,
 #' Survival based drivers for sequence data
 
 
-SPSSPath<-"/users/hragbalian/desktop/coty p2p/basic.sav" # should have both
-TPVarNames<-c(paste("Toucpoint_00",1:9,sep=""),paste("Toucpoint_0",10:50,sep=""))
-TimeVarNames<-c(paste("SliderVal_00",1:9,sep=""),paste("SliderVal_0",10:50,sep=""))
-
-
-Duration<-abs(floor(rnorm(57,mean=5,sd=2)))
-
-
-
 sequence_driver<-function(SPSSPath,
 	TPVarNames,
 	TimeVarNames,
 	DurationVarName,
 	DecayTime=35,
 	DecayRate=.95,
+	TermEventNumCode=NULL,
+	JourneySubgroups=NULL,				# this should be a specific Solutions slot from the p2p_wrap
+	ExcelOutPath=NULL
 	) 
 	{
 
+	if (is.null(TermEventNumCode)) stop("Please specify the numeric code for the terminal event")
+	
 	# decay function
 	decay_func<-function(timelength,rate) {
 		vect<-1 
 		for (i in 2:timelength) vect<-c(vect,vect[length(vect)]*rate)
 		return(vect)
 		}
-
+		
+	  
+	library(foreign)
+	
 	# Data read
 	suppressWarnings(Data<-read.spss(SPSSPath, use.value.labels = F, to.data.frame = T))
+
+	tpLabels<-names(attr(Data[,TPVarNames][,1],"value.labels"))[order(as.numeric(attr(Data[,TPVarNames][,1],"value.labels")))]
+	
 	Duration<-Data[,DurationVarName]
 	
 	# Grab decay
@@ -601,15 +747,23 @@ sequence_driver<-function(SPSSPath,
 	MaxTime<-max(Data[,TimeVarNames],na.rm=T)
 	
 	storeRspMats<-list()
+	storeSerials<-list()
 	
-	########
-	## Start respondent loop
+	message("Expanding survival data with decay")
+	###########################
+	## Start respondent loop ##
 	for (rsp in 1:dim(Data)[1]) {
+		
+		storeSerials[[rsp]]<-Data[rsp,1]
 		
 		rspTP<-Data[rsp,TPVarNames]
 			rspTP<-rspTP[!is.na(rspTP)]
 		rspTime<-Data[rsp,TimeVarNames]
 			rspTime<-rspTime[!is.na(rspTime)]
+		
+		Serials<-Data[rsp,1]
+		
+		if (all(rspTime==0)) rspTime[length(rspTime)]<-MaxTime
 		
 		# Adjust all the times if the max time is not MaxTime
 		if (max(rspTime)!=MaxTime) {
@@ -622,7 +776,7 @@ sequence_driver<-function(SPSSPath,
 		rspTime<-rspTime/100
 
 		# Initialize time decaying object for each event type
-		rspMatrix<-matrix(0,nrow=Duration[rsp],ncol=MaxCode)
+		rspMatrix<-matrix(0,nrow=Duration[rsp]+1,ncol=MaxCode)
 	
 		# Map
 		Map<-Duration[rsp]*rspTime
@@ -633,8 +787,11 @@ sequence_driver<-function(SPSSPath,
 		
 		
 		# Store events
-		for (p in 1:length(MapFloored)) rspMatrix[MapFloored[p],rspTP[p]]<-rspMatrix[MapFloored[p],rspTP[p]]+1
-		
+		for (p in 1:length(MapFloored)) {
+			if (!(rspTP[p]%in%TermEventNumCode)) rspMatrix[MapFloored[p],rspTP[p]]<-rspMatrix[MapFloored[p],rspTP[p]]+1
+			if (rspTP[p]%in%TermEventNumCode) rspMatrix[dim(rspMatrix)[1],rspTP[p]]<-1
+			}
+	
 		# Apply decay to event matrix
 		for (j in 1:dim(rspMatrix)[2]) {
 			# check to see if there are any events of this type
@@ -663,7 +820,7 @@ sequence_driver<-function(SPSSPath,
 			} # close for j (the decay)
 		
 		# Add the duration variable to the matrix
-		rspMatrix<-cbind(rspMatrix,1:Duration[rsp])
+		rspMatrix<-cbind(rspMatrix,0:Duration[rsp])
 		
 		#Store the respondent matrix
 		storeRspMats[[rsp]]<-rspMatrix
@@ -671,17 +828,53 @@ sequence_driver<-function(SPSSPath,
 		} # close the rsp loop (looping across respondents)
 	
 	### Reduce the data to a single data.frame
+		StoreResults<-list()
+		
+		message("Running total level survival impact")
 		survivalData<-as.data.frame(Reduce("rbind",storeRspMats))
 		colnames(survivalData)<-c(paste("JourneyType_",1:MaxCode,sep=""),"Duration")
-	
 		survivalVars<-colnames(survivalData)
 	
-	### Estimate the survival model
+		VarsShouldModel<-colnames(survivalData)
+			VarsShouldModel<-VarsShouldModel[-which(VarsShouldModel%in%c("Duration",paste("JourneyType_",TermEventNumCode,sep="")))]
+		
 		eval(parse(text=paste("Model<-glm(",survivalVars[length(survivalVars)-1],"~.,survivalData,family='binomial')",sep="")))
+		tempResults<-coef(summary(Model))[,c(1,4)]
+			tempResults<-tempResults[match(VarsShouldModel,rownames(tempResults)),]
+			
+		rownames(tempResults)<-tpLabels[-TermEventNumCode]
+		StoreResults[["TotalImpact"]]<-tempResults
 		
+		if (!is.null(JourneySubgroups)) {
+			message("Running journey/sub group level impact")
+			JourneySubgroups<-as.data.frame(JourneySubgroups)	
+			HowManyGroups<-max(JourneySubgroups$currSol)
+			for (gr in 1:HowManyGroups) {
+				message(paste("Group ", gr, " of ",HowManyGroups, sep=""))
+				gr_filter<-which(unlist(storeSerials)%in%JourneySubgroups[JourneySubgroups$currSol==gr,"IDs"])
+				survivalData<-as.data.frame(Reduce("rbind",storeRspMats[gr_filter]))
+				colnames(survivalData)<-c(paste("JourneyType_",1:MaxCode,sep=""),"Duration")
+				survivalVars<-colnames(survivalData)
+				eval(parse(text=paste("Model<-glm(",survivalVars[length(survivalVars)-1],"~.,survivalData,family='binomial')",sep="")))
+				tempResults<-coef(summary(Model))[,c(1,4)]
+					tempResults<-tempResults[match(VarsShouldModel,rownames(tempResults)),]
+				rownames(tempResults)<-tpLabels[-TermEventNumCode]
+				StoreResults[[paste("JGImpact",gr,sep="")]]<-tempResults
+
+				}
+			}
+			
+		Return<-as.data.frame(Reduce("cbind",StoreResults))
+		colnames(Return)<-matrix(matrix(c(paste(colnames(Return)[1],names(StoreResults),sep="_"),paste(colnames(Return)[2],names(StoreResults),sep="_")),nrow=2,ncol=length(StoreResults),byrow=T))
+	
+	if (!is.null(ExcelOutPath)) {
+		library(WriteXLS)
+		WriteXLS("Return",ExcelOutPath,row.names=T,col.names=T)
+		}
 		
+	return(Return)
+	
 	}
 
 
-#timeData$JourneyType_28[timeData$JourneyType_28>0 & timeData$JourneyType_28<1]<-1
 
