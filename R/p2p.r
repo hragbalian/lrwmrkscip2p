@@ -1,21 +1,34 @@
 
 # Final model
 OtherProfileBinariesPath="/users/hragbalian/desktop/coty p2p/Profile Variables.sav"
-SeqDataPath<-"/users/hragbalian/desktop/coty p2p/Data/fragrance.sav"
-fragrance_Out<-p2p_wrap(SeqDataPath=SeqDataPath,
-	DFA=T,
+SeqDataPath<-"/users/hragbalian/desktop/coty p2p/Data/cosmetic.sav"
+
+	SeqDataPath=SeqDataPath
+	DFA=T
+	CapSeqLength = 20
+	SeqMinLength=4
+	SingleState=TRUE
+	HowManyClusters=2
+	costMatrix=NULL
+	ConvertOutToSPSS=TRUE
+	OtherProfileBinariesPath=NULL
+	skewThreshold=.2
+
+
+cosmetic_Out<-p2p_wrap(SeqDataPath="/users/hragbalian/desktop/coty p2p/Data/cosmetic.sav",
+	DFA=TRUE,
 	CapSeqLength = 20,
 	SeqMinLength=4,
 	SingleState=TRUE,
-	HowManyClusters=25,
+	HowManyClusters=2,
 	costMatrix=NULL,
 	ConvertOutToSPSS=TRUE,
-	ExcelOutPath="/users/hragbalian/desktop/coty p2p/Fragrance Out.xlsx",
-	OtherProfileBinariesPath=OtherProfileBinariesPath,
-	skewThreshold=.2)
-
-
-
+	ExcelOutPath=NULL,
+	OtherProfileBinariesPath=NULL,
+	skewThreshold=.2,
+	CustomCluster=NULL,
+	ReportBtwWithinPlot=T
+	)
 
 
 
@@ -57,7 +70,7 @@ p2p_wrap<-function(SeqDataPath,
 			OtherProfileBinariesPath=NULL, # A path to an SPSS file that contains profile variable binaries, first column should be IDs.
 			ExcelOutPath=NULL,
 			ConvertOutToSPSS=TRUE,		# Convert output to an SPSS conformable means table?
-			#Group=NULL,					# Either Null, or a two slot list, one with variable name, one with variable value to select on, e.g. list("DV_Category_PipeIn",2). Creates sequences within the group. 
+			#Group=NULL,				# Either Null, or a two slot list, one with variable name, one with variable value to select on, e.g. list("DV_Category_PipeIn",2). Creates sequences within the group. 
 			skewThreshold=.3,			# Threshold for skews to qualify as a connection in the journey map
 			CustomCluster=NULL,			# Nx2 dataframe, first column containing IDs, second column the labels. 
 			ReportBtwWithinPlot=TRUE
@@ -153,6 +166,9 @@ p2p_wrap<-function(SeqDataPath,
 			}
 		return(list(Arcs=store,ArcSizes=storeMeans))
 	}
+	
+	# Non sequence group
+	NonSequenceGroup<-list()
 		
 	# Load data
 	message("Loading in data")
@@ -167,6 +183,7 @@ p2p_wrap<-function(SeqDataPath,
 	
 		# If there's been a cap placed on sequence length, remove sequences greater than that cap
 		if (!is.null(CapSeqLength)) {
+			NonSequenceGroup[[length(NonSequenceGroup)+1]]<-Data[which(apply(Data[,-1],1,function(x) table(!is.na(x))[2]<SeqMinLength)),1]
 			Data<-Data[which(apply(Data[,-1],1,function(x) table(!is.na(x))[2]<=CapSeqLength & table(!is.na(x))[2]>=SeqMinLength)),]
 			Data<-Data[,c(1:(CapSeqLength+1))]
 			}
@@ -190,11 +207,13 @@ p2p_wrap<-function(SeqDataPath,
 		if (Any1) {
 			message("Removing single-step sequences")
 			Which1<-which(seqlength(SeqData)%in%1)	
+			NonSequenceGroup[[length(NonSequenceGroup)+1]]<-Data[Which1,1]
 			# Truncate sequences to those that are multi-step and those that are single step
 			SeqDataSingle<-SeqData[Which1,] # can return this later
 			SeqData<-SeqData[-(Which1),]
 			IDs<-IDs[-(Which1)]
 			}
+	
 
 	###############################	
 	## Start of cluster analysis ##
@@ -213,50 +232,53 @@ p2p_wrap<-function(SeqDataPath,
 		################################################
 		### Create within vs. between distance plot. ###
 		################################################
-		message("Generating Between vs. Within Cluster Distances Plot")
-		storeClusterDistances<-list()
+		if (ReportBtwWithinPlot) {
 		
-			# Create plot metrics
-			DistWithin<-matrix(,ncol=1,nrow=length(1:50))
-			DisBtw<-matrix(,ncol=1,nrow=length(1:50))
-			for (i in 2:50) {
-				curCut<-cutree(clusterward, k=i)
+			message("Generating Between vs. Within Cluster Distances Plot")
+			storeClusterDistances<-list()
+		
+				# Create plot metrics
+				DistWithin<-matrix(,ncol=1,nrow=length(1:50))
+				DisBtw<-matrix(,ncol=1,nrow=length(1:50))
+				for (i in 2:50) {
+					curCut<-cutree(clusterward, k=i)
 			
-				# Avg distance within
-				tempStore<-matrix(,ncol=1,nrow=i)
-				for (kk in 1:i) {
-					tempDist<-Distances[which(curCut==kk),which(curCut==kk)]
-					tempStore[kk]<-mean(tempDist[lower.tri(tempDist)])
-					}
-					DistWithin[i]<-mean(tempStore)
-			
-				# Distances between 
-				tempGroupDistances<-matrix(0,i,i)
-				for (kk1 in 1:i) {
-					for (kk2 in 1:i) {
-						if (kk1!=kk2) tempGroupDistances[kk1,kk2]<-mean(Distances[which(curCut==kk1),which(curCut==kk2)])
+					# Avg distance within
+					tempStore<-matrix(,ncol=1,nrow=i)
+					for (kk in 1:i) {
+						tempDist<-Distances[which(curCut==kk),which(curCut==kk)]
+						tempStore[kk]<-mean(tempDist[lower.tri(tempDist)])
 						}
-					}
-					# Store the cluster distance matrix if its specified in HowManyClusters
-					if (any(i==HowManyClusters)) storeClusterDistances[[paste("cluster",i,"_dists",sep="")]]<-tempGroupDistances
-					DisBtw[i]<-mean(tempGroupDistances[lower.tri(tempGroupDistances)])
-				}
-		
-			# Look at rate of change of btw vs within cluster			
-			DiffBtwWith<-diff(DisBtw-DistWithin)
-			storeZ<-matrix(,ncol=1,nrow=length(DiffBtwWith))
-			for (ll in 2:length(DiffBtwWith)) {
-				storeZ[ll]<-(DiffBtwWith[ll]-mean(DiffBtwWith[1:ll],na.rm=T))/sd(DiffBtwWith[1:ll],na.rm=T)
-				}
+						DistWithin[i]<-mean(tempStore)
 			
-			library(ggplot2)
-			plotData<-as.data.frame(cbind(DiffBtwWith,1:length(DiffBtwWith)))
-				colnames(plotData)<-c("Distances","Clusters")
-			plotter<-ggplot(plotData)
-			microClusterPlot<-plotter+geom_line(aes(x=Clusters,y=Distances))+
-				stat_smooth(aes(x=Clusters,y=Distances),se=F)+
-				ggtitle("Difference Between vs. Within Cluster Distances")
-				
+					# Distances between 
+					tempGroupDistances<-matrix(0,i,i)
+					for (kk1 in 1:i) {
+						for (kk2 in 1:i) {
+							if (kk1!=kk2) tempGroupDistances[kk1,kk2]<-mean(Distances[which(curCut==kk1),which(curCut==kk2)])
+							}
+						}
+						# Store the cluster distance matrix if its specified in HowManyClusters
+						if (any(i==HowManyClusters)) storeClusterDistances[[paste("cluster",i,"_dists",sep="")]]<-tempGroupDistances
+						DisBtw[i]<-mean(tempGroupDistances[lower.tri(tempGroupDistances)])
+					}
+		
+				# Look at rate of change of btw vs within cluster			
+				DiffBtwWith<-diff(DisBtw-DistWithin)
+				storeZ<-matrix(,ncol=1,nrow=length(DiffBtwWith))
+				for (ll in 2:length(DiffBtwWith)) {
+					storeZ[ll]<-(DiffBtwWith[ll]-mean(DiffBtwWith[1:ll],na.rm=T))/sd(DiffBtwWith[1:ll],na.rm=T)
+					}
+			
+				library(ggplot2)
+				plotData<-as.data.frame(cbind(DiffBtwWith,1:length(DiffBtwWith)))
+					colnames(plotData)<-c("Distances","Clusters")
+				plotter<-ggplot(plotData)
+				microClusterPlot<-plotter+geom_line(aes(x=Clusters,y=Distances))+
+					stat_smooth(aes(x=Clusters,y=Distances),se=F)+
+					ggtitle("Difference Between vs. Within Cluster Distances")
+			
+			}	
 			
 		################################################
 		################################################
@@ -393,7 +415,8 @@ p2p_wrap<-function(SeqDataPath,
 			
 			currSol<-eval(parse(text=cN))
 			maxCurrSol<-max(as.numeric(as.character(currSol)))
-			storeClusterSolutions[[cN]]<-cbind(IDs,currSol)
+			if (length(NonSequenceGroup)==0) storeClusterSolutions[[cN]]<-cbind(IDs,currSol)
+			if (length(NonSequenceGroup)>0) storeClusterSolutions[[cN]]<-rbind(cbind(IDs,currSol),cbind(unlist(NonSequenceGroup),99))
 			
 			## Identify PROTOTYPICAL sequences
 			if (is.null(CustomCluster)) {
@@ -406,7 +429,7 @@ p2p_wrap<-function(SeqDataPath,
 					currProto<-apply(currProto,2,as.character)
 					storeCurrProto<-list()
 					if (!is.null(dim(currProto))) for (prt in 1:dim(currProto)[1]) storeCurrProto[[prt]] <-suppressWarnings(paste(tpLabels[as.numeric(currProto[prt,])][!is.na(tpLabels[as.numeric(currProto[prt,])])],collapse=">"))
-					if (is.null(dim(currProto))) storeCurrProto[[prt]] <-suppressWarnings(paste(tpLabels[as.numeric(currProto)][!is.na(tpLabels[as.numeric(currProto)])],collapse=">"))
+					if (is.null(dim(currProto))) storeCurrProto[[1]] <-suppressWarnings(paste(tpLabels[as.numeric(currProto)][!is.na(tpLabels[as.numeric(currProto)])],collapse=">"))
 					tempStoreProto[[rNg]]<-unlist(storeCurrProto)
 					}
 				
@@ -486,6 +509,7 @@ p2p_wrap<-function(SeqDataPath,
 			
 			# Explore the sequence class membership	(range of classes is automatically selected, around a 1/5 of the number of sequences
 			RangeClassesExplore<-ceiling(maxCurrSol/5):(ceiling(maxCurrSol/5)+ceiling(maxCurrSol/5))
+			if (any(RangeClassesExplore==1)) RangeClassesExplore<-RangeClassesExplore[-1] # remove 1 class to explore, cuz can't do it. 
 			tempStoreClassAssign<-matrix(,ncol=length(RangeClassesExplore),nrow=length(currSol))
 			tempTempStoreCPSClassAssignProp<-list()
 			for (rce in RangeClassesExplore) {
@@ -504,7 +528,7 @@ p2p_wrap<-function(SeqDataPath,
 				}
 			
 			# store it
-			storeStandClassAssign[[cN]]<-tempStoreClassAssign
+			storeStandClassAssign[[cN]]<-cbind(IDs,tempStoreClassAssign)
 			storeCPSClassAssignProp[[cN]]<-tempTempStoreCPSClassAssignProp
 			
 			
