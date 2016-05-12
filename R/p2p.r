@@ -1,19 +1,23 @@
 
 # Final model
-OtherProfileBinariesPath="/users/hragbalian/desktop/coty p2p/Profile Variables.sav"
-SeqDataPath<-"/users/hragbalian/desktop/coty p2p/Data/cosmetic.sav"
+SeqDataPath="/users/hragbalian/desktop/sw concrete/data/R151842 Journey Points.sav"
+OtherProfileBinariesPath="/users/hragbalian/desktop/sw concrete/data/R151842 Profile Variables.sav"
+tpLabels<-c("Friends/family advice online",	"Friends/family advice in-person",	"CSR product consult online",	"CSR product consult at store",	"Pro product consult online",	"Pro product consult in person",	"CSR application consult online",	"CSR application consult at store",	"Pro application consult online",	"Pro application consult in store",	"Price comparison online",	"Price comparison at store",	"Brand comparison online",	"Brand comparison at store",	"Sales / promotions online",	"Sales / promotions at store",	"Product features / benefits online",	"Product features / benefits at store",	"Tools / materials research online",	"Tools / materials research at store",	"Consumer reviews online",	"Consumer reviews in-person",	"Magazines online",	"Magazines in person",	"Brochures / guides online",	"Brochures / guides in-person",	"Images of finished projects online",	"Images of finished projects in person",	"Research retailers online",	"Research retailers in-person",	"Check in-stock online",	"Check in-stock at store",	"Tutorials/ how-to videos online",	"Tutorials/ how-to videos in person",	"How-to classes online",	"How-to classes in-person",	"Purchased coatings online",	"Purchased coatings at store",	"Purchased supplies online",	"Purchased supplies at store",	"Prepared the surface online",	"Prepared the surface",	"Applied the coatings online",	"Applied the coatings",	"Hired a professional online",	"Hired a professional",	"Project Completed")
+
+
+#SeqDataPath<-"/users/hragbalian/desktop/coty p2p/Data/cosmetic.sav"
 
 	SeqDataPath=SeqDataPath
 	DFA=T
-	CapSeqLength = 20
+	CapSeqLength = 40
 	SeqMinLength=4
 	SingleState=TRUE
-	HowManyClusters=2
+	HowManyClusters=8
 	costMatrix=NULL
 	ConvertOutToSPSS=TRUE
 	OtherProfileBinariesPath=NULL
 	skewThreshold=.2
-
+	CustomCluster=NULL
 
 cosmetic_Out<-p2p_wrap(SeqDataPath="/users/hragbalian/desktop/coty p2p/Data/cosmetic.sav",
 	DFA=TRUE,
@@ -84,9 +88,6 @@ p2p_wrap<-function(SeqDataPath,
 	library(cluster)
 	library(MASS)
 	library(klaR)
-	library(igraph)
-	#library(baliaviz)
-	library(networkD3)
 	library(igraph)
 	
 	# Load custom functions
@@ -166,6 +167,21 @@ p2p_wrap<-function(SeqDataPath,
 			}
 		return(list(Arcs=store,ArcSizes=storeMeans))
 	}
+	
+	# Function to create a simple baliaviz visualization from a converted edgelist output
+	gen_baliaviz_fromconvertedgelist<-function(theConvertedEdgeList) 
+		{
+				
+				LINKS<-as.data.frame(theConvertedEdgeList$Numeric)
+					LINKS<-cbind(LINKS,5)
+					colnames(LINKS)<-c("source","target","value")
+				
+				NODES<-as.data.frame(theConvertedEdgeList$Character)
+					NODES<-cbind(NODES,1,10)
+					colnames(NODES)<-c("name","group","size")
+				
+				return(baliaviz::forceNetwork(Nodes = NODES, Links = LINKS))
+				}
 	
 	# Non sequence group
 	NonSequenceGroup<-list()
@@ -402,8 +418,10 @@ p2p_wrap<-function(SeqDataPath,
 		masterStoreGraphTables<-list()
 		storeBaseSizes<-list()
 		storeCompositeProtos<-list()
+		storeCompositeProtosBaliaviz<-list()
 		storeCompositeProtoDistances<-list()
 		storeSimplyCompositeProtoDistances<-list()
+		
 		
 		storeStandCPSDists<-list()
 		storeStandClassAssign<-list()
@@ -484,6 +502,9 @@ p2p_wrap<-function(SeqDataPath,
 			# Convert the character edgelist for mapping
 			storeCompositeProtos[[cN]]<-lapply(lapply(CompositeProto,balialab::convert_edgelist),function(x) list(Numeric=x$Numeric-1,Character=x$Character))
 			
+
+			
+						
 			# Identify distances between micro-clusters
 			tempGroupDistances<-matrix(0,maxCurrSol,maxCurrSol)
 			for (kk1 in 1:maxCurrSol) {
@@ -531,6 +552,7 @@ p2p_wrap<-function(SeqDataPath,
 			storeStandClassAssign[[cN]]<-cbind(IDs,tempStoreClassAssign)
 			storeCPSClassAssignProp[[cN]]<-tempTempStoreCPSClassAssignProp
 			
+			#storeCompositeProtosBaliaviz[[1]][which(storeCPSClassAssignProp[[cN]][[6]][2,]!=0)]
 			
 			# ... continue with profiling	
 			FirstList<-list()
@@ -557,7 +579,7 @@ p2p_wrap<-function(SeqDataPath,
 					LastEventTable<-table(factor(LastEventTable,levels=1:maxtpCode))/dim(currClusSeqs)[1]
 				
 				# Total frequency
-				TotalPercent<-seqstatf(currClusSeqs)$Percent/100
+				TotalPercent<-table(factor(matrix(as.matrix(currClusSeqs)),levels=1:maxtpCode))/sum(table(factor(matrix(as.matrix(currClusSeqs)),levels=1:maxtpCode)))
 				
 				# Transition rates
 				TransitionRate<-matrix(t(seqtrate(currClusSeqs)))
@@ -597,6 +619,7 @@ p2p_wrap<-function(SeqDataPath,
 				BindedTables<-rbind(FirstStore,LastStore,TotalStore,TransitionStore)
 				BindedTablesStore[[cN]]<-BindedTables
 			
+				{ #cut
 				# Piece sequence map together
 				FirstAssigned<-assigner(FirstStore,.1)
 				Assigned<-assigner(TransitionStore,skewThreshold)
@@ -627,19 +650,21 @@ p2p_wrap<-function(SeqDataPath,
 					LinksNodes<-list(Links=Links,Nodes=Nodes)
 					storeGraphTables[[group]]<-LinksNodes
 					
-					storeGraphs[[group]]<-forceNetwork(Links,Nodes,Source = "source",
-						Target = "target", Value = "value", NodeID = "name",
-						Nodesize = "size",
-							 Group = "group",opacity = 1, charge=-1000,opacityNoHover=1,fontSize=10,zoom=TRUE)	
-					
-					
-					#storeGraphs[[group]]<-forceNetwork(Links=Links,Nodes=Nodes)	
+					storeGraphs[[group]]<-baliaviz::forceNetwork(Links=Links,Nodes=Nodes)	
 				}
-					
+					}
 				masterStoreGraphs[[cN]]<-storeGraphs
 				masterStoreGraphTables[[cN]]<-storeGraphTables
 				storeBaseSizes[[cN]]<-cbind(1:maxCurrSol,unlist(BaseSizes)[-length(unlist(BaseSizes))])
-				
+			
+			##################################################################################################################
+			## Go back to composite prototype tables to fill in those tables with profiling information about the sequences ##
+			##################################################################################################################
+			
+			storeCompositeProtos[[cN]][[1]]
+			
+			storeCompositeProtosBaliaviz[[cN]]<-lapply(storeCompositeProtos[[cN]],gen_baliaviz_fromconvertedgelist)	
+			
 			###########################################################################################
 			## If there are additional profile variables to append, add those and obtain their means ##
 			###########################################################################################
@@ -721,6 +746,7 @@ p2p_wrap<-function(SeqDataPath,
 				}
 			if (ReportBtwWithinPlot) Return[["microClusterPlot"]]<-microClusterPlot
 			Return[["CompositeProtos"]]<-storeCompositeProtos
+			Return[["CompositeProtosBaliaviz"]]<-storeCompositeProtosBaliaviz
 			Return[["CPSDistances"]]<-storeStandCPSDists
 			Return[["ClassAssigned"]]<-storeStandClassAssign
 			Return[["ClassAssignProps"]]<-storeCPSClassAssignProp
