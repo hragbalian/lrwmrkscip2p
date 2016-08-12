@@ -1,41 +1,163 @@
 
-# Final model
-SeqDataPath="/users/hragbalian/desktop/sw concrete/data/R151842 Journey Points.sav"
-OtherProfileBinariesPath="/users/hragbalian/desktop/sw concrete/data/R151842 Profile Variables.sav"
-tpLabels<-c("Friends/family advice online",	"Friends/family advice in-person",	"CSR product consult online",	"CSR product consult at store",	"Pro product consult online",	"Pro product consult in person",	"CSR application consult online",	"CSR application consult at store",	"Pro application consult online",	"Pro application consult in store",	"Price comparison online",	"Price comparison at store",	"Brand comparison online",	"Brand comparison at store",	"Sales / promotions online",	"Sales / promotions at store",	"Product features / benefits online",	"Product features / benefits at store",	"Tools / materials research online",	"Tools / materials research at store",	"Consumer reviews online",	"Consumer reviews in-person",	"Magazines online",	"Magazines in person",	"Brochures / guides online",	"Brochures / guides in-person",	"Images of finished projects online",	"Images of finished projects in person",	"Research retailers online",	"Research retailers in-person",	"Check in-stock online",	"Check in-stock at store",	"Tutorials/ how-to videos online",	"Tutorials/ how-to videos in person",	"How-to classes online",	"How-to classes in-person",	"Purchased coatings online",	"Purchased coatings at store",	"Purchased supplies online",	"Purchased supplies at store",	"Prepared the surface online",	"Prepared the surface",	"Applied the coatings online",	"Applied the coatings",	"Hired a professional online",	"Hired a professional",	"Project Completed")
+#' Function to remove some specific journey points from the data, and format remaining data correctly
+
+remove_journey_points<-function(SeqDataPath, 	
+	WhichEventCodesRemove=NULL,
+	TerminalEventCode,
+	ReplaceTerminalWithCode=NULL) {
+	
+	library(foreign)
+
+	if (is.character(SeqDataPath)) Data<-read.spss(SeqDataPath,use.value.labels = F, to.data.frame = T)
+	if (is.data.frame(SeqDataPath)) Data<-SeqDataPath
+
+	whichDP<-apply(Data[,2:51],1,function(x) which(x%in%WhichEventCodesRemove))
+	DataDP<-Data
+	for (i in 1:dim(Data)[1]) DataDP[i,whichDP[[i]]+1]<-NA
+
+	whichValid<-apply(DataDP,1,function(x) which(!is.na(x)))
+
+	DataDPFinal<-matrix(,ncol=51,nrow=dim(Data)[1])
+	for (i in 1:dim(Data)[1]) {
+		DataDPFinal[i,1:length(whichValid[[i]])]<-as.matrix(DataDP[i,whichValid[[i]]])
+		DataDPFinal[i,which(DataDPFinal[i,]%in%TerminalEventCode)]<-ReplaceTerminalWithCode
+		}
+	colnames(DataDPFinal)<-colnames(Data)
+	return(as.data.frame(DataDPFinal))
+
+}
 
 
-#SeqDataPath<-"/users/hragbalian/desktop/coty p2p/Data/cosmetic.sav"
 
-	SeqDataPath=SeqDataPath
-	DFA=T
-	CapSeqLength = 40
-	SeqMinLength=4
-	SingleState=TRUE
-	HowManyClusters=8
-	costMatrix=NULL
-	ConvertOutToSPSS=TRUE
-	OtherProfileBinariesPath=NULL
-	skewThreshold=.2
-	CustomCluster=NULL
+#' Apply a set of coefficients from the wrapper to a new dataset
+#' 
 
-cosmetic_Out<-p2p_wrap(SeqDataPath="/users/hragbalian/desktop/coty p2p/Data/cosmetic.sav",
-	DFA=TRUE,
-	CapSeqLength = 20,
-	SeqMinLength=4,
-	SingleState=TRUE,
-	HowManyClusters=2,
-	costMatrix=NULL,
-	ConvertOutToSPSS=TRUE,
-	ExcelOutPath=NULL,
-	OtherProfileBinariesPath=NULL,
-	skewThreshold=.2,
-	CustomCluster=NULL,
-	ReportBtwWithinPlot=T
+apply_dfacoefs<-function(
+	SeqDataPath,
+	priorP2PwrapObj,		# Object from p2p_wrap
+	whichCluster=NULL
 	)
+	{		
+	
+	if (is.null(whichCluster)) stop("Specify from which cluster you want to extract the DFA coefficients.")
+	
+	# Retrieve stuff from the priorP2PwrapObj
+	
+		CapSeqLength<-priorP2PwrapObj$CapSeqLength
+		SeqMinLength<-priorP2PwrapObj$SeqMinLength
+		SingleState<-priorP2PwrapObj$SingleState	
+		DFACoefs<-eval(parse(text=paste("gap_m4_c8_15_ssF$DFACoefs$cluster",whichCluster,sep="")))
 
+	#######################
+	## Data manipulation ##
+	#######################
+	 	
+	# Crate Dummy variables out of the factor
+		CreateDummy<-function(CategoricalVector,Varname,CreateBaseline=1) 
+			{
+		UniqueCategories<-unique(CategoricalVector)
+		Store<-matrix(0,ncol=length(UniqueCategories),nrow=length(CategoricalVector))
+		for (i in 1:length(CategoricalVector)) {
+		  Store[i,which(UniqueCategories%in%CategoricalVector[i])]<-1
+		}
+	
+		  #Process labels
+		  UniqueCategories<-as.numeric(gsub("-","_", UniqueCategories))
+		  Store<-Store[,order(UniqueCategories)]
+		  UniqueCategories<-UniqueCategories[order(UniqueCategories)]
+		  colnames(Store)<-paste(Varname,UniqueCategories,sep="_")
+		  if (CreateBaseline!=0) {
+			tempColnames<-colnames(Store)[-CreateBaseline]
+			Store<-as.matrix(Store[,-CreateBaseline])
+			colnames(Store)<-tempColnames
+		  }
+	  
+		return(Store)
+	
+	  }
 
+	# Non sequence group
+	NonSequenceGroup<-list()
+		
+	# Load data
+	message("Loading in data")
+	suppressWarnings(Data<-read.spss(SeqDataPath, use.value.labels = F, to.data.frame = T))
+	
+	# retrieve event type labels
+	if (is.null(tpLabels)) tpLabels<-names(attr(Data[,2],"value.labels"))[order(as.numeric(attr(Data[,2],"value.labels")))]
+	
+	
+		# Remove rows with only missing data
+		if (length(which(apply(Data[,-c(1,2)],1,function(x) all(is.na(x)))))>0) Data<-Data[-which(apply(Data[,-c(1,2)],1,function(x) all(is.na(x)))),]
+	
+		# If there's been a cap placed on sequence length, remove sequences greater than that cap
+		if (!is.null(CapSeqLength)) {
+			NonSequenceGroup[[length(NonSequenceGroup)+1]]<-Data[which(apply(Data[,-1],1,function(x) table(!is.na(x))[2]<SeqMinLength)),1]
+			Data<-Data[which(apply(Data[,-1],1,function(x) table(!is.na(x))[2]<=CapSeqLength & table(!is.na(x))[2]>=SeqMinLength)),]
+			Data<-Data[,c(1:(CapSeqLength+1))]
+			}
+	
+		# Record the ids of everyone who remains
+		IDs<-Data[,1]
+	
+		# Retrieve the max code for the touchpoints
+		maxtpCode=max(Data[,-1],na.rm=T)
+		TerminalEventLabel<-tpLabels[maxtpCode]
+		
+	# Start building sequences
+		if (!is.null(CapSeqLength)) SeqData<-seqdef(Data,var=colnames(Data)[2:(CapSeqLength+1)])
+		if (is.null(CapSeqLength)) SeqData<-seqdef(Data[,-1])
+	
+	# Check to see if single state is turned on, and if so, revise sequence data
+		if (SingleState) SeqData<-seqdss(SeqData)
 
+	# Check to see if there are any single-step sequences.  If so, remove them from the sequences
+		Any1<-any(seqlength(SeqData)%in%1)	
+		if (Any1) {
+			message("Removing single-step sequences")
+			Which1<-which(seqlength(SeqData)%in%1)	
+			NonSequenceGroup[[length(NonSequenceGroup)+1]]<-Data[Which1,1]
+			# Truncate sequences to those that are multi-step and those that are single step
+			SeqDataSingle<-SeqData[Which1,] # can return this later
+			SeqData<-SeqData[-(Which1),]
+			IDs<-IDs[-(Which1)]
+			}
+	
+	
+	########################
+	## Apply Coefficients ##
+	########################
+	
+			# Retrieves indvidual-level measurements on the sequences
+			Length<-seqlength(SeqData)
+			FirstEvent<-CreateDummy(SeqData[,1],"FirstEvent")
+			LastEvent<-matrix(,ncol=1,nrow=length(Length))
+				for(i in 1:length(Length)) LastEvent[i]<-SeqData[i,Length[i]]
+				if (length(table(LastEvent))==1) for(i in 1:length(Length)) LastEvent[i]<-SeqData[i,Length[i]-1]
+				LastEvent<-CreateDummy(LastEvent,"LastEvent")
+			CountOfEachEvent<-seqistatd(SeqData)
+				colnames(CountOfEachEvent)<-paste("CountOfEventType",colnames(CountOfEachEvent),sep="")
+				
+			# Remove highly correlated variables at > .6
+				DFAData<-cbind(FirstEvent,LastEvent,CountOfEachEvent)
+			
+		
+			# Apply	
+			WhichCols<-match(rownames(DFACoefs),colnames(DFAData))
+			AlgoData<-DFAData[,WhichCols[2:length(WhichCols)]]	
+			
+			apply_coef<-function(tData,Coefs) Coefs[1]+sum(tData*Coefs[2:length(Coefs)])
+				
+			storeScores<-list()
+			for (hmc in 1:whichCluster) storeScores[[hmc]]<-apply(AlgoData,1,apply_coef,DFACoefs[,hmc])
+			storeScores<-Reduce("cbind",storeScores)
+			
+			Assigned<-rbind(cbind(IDs,max.col(storeScores)),cbind(unlist(NonSequenceGroup),99))
+			colnames(Assigned)<-c("IDs","currSol")
+			return(Assigned)
+			
+		}
+		
 
 		
 #' Path to purchase wrapper
@@ -68,8 +190,10 @@ p2p_wrap<-function(SeqDataPath,
 			DFA = TRUE,				
 			CapSeqLength = 20,
 			SeqMinLength = 3,
+			tpLabels = NULL,
 			SingleState= FALSE,			
-			HowManyClusters=5:10,		
+			HowManyClusters=5:10,
+			SeriesTitle=NULL,		
 			costMatrix=NULL,
 			OtherProfileBinariesPath=NULL, # A path to an SPSS file that contains profile variable binaries, first column should be IDs.
 			ExcelOutPath=NULL,
@@ -173,14 +297,22 @@ p2p_wrap<-function(SeqDataPath,
 		{
 				
 				LINKS<-as.data.frame(theConvertedEdgeList$Numeric)
-					LINKS<-cbind(LINKS,5)
 					colnames(LINKS)<-c("source","target","value")
 				
 				NODES<-as.data.frame(theConvertedEdgeList$Character)
-					NODES<-cbind(NODES,1,10)
 					colnames(NODES)<-c("name","group","size")
+					NODES$group<-as.numeric(as.character(NODES$group))
+					NODES$size<-as.numeric(as.character(NODES$size))
 				
-				return(baliaviz::forceNetwork(Nodes = NODES, Links = LINKS))
+				LINKS$source<-as.numeric(as.character(LINKS$source))
+				LINKS$target<-as.numeric(as.character(LINKS$target))
+				LINKS$value<-as.numeric(as.character(LINKS$value))
+				NODES$group<-as.numeric(as.character(NODES$group))
+				NODES$size<-as.numeric(as.character(NODES$size))
+					
+				if (!is.null(theConvertedEdgeList$Title)) return(baliaviz::forceNetwork(Nodes = NODES, Links = LINKS,title=theConvertedEdgeList$Title))
+				if (is.null(theConvertedEdgeList$Title)) return(baliaviz::forceNetwork(Nodes = NODES, Links = LINKS))
+
 				}
 	
 	# Non sequence group
@@ -188,11 +320,14 @@ p2p_wrap<-function(SeqDataPath,
 		
 	# Load data
 	message("Loading in data")
-	suppressWarnings(Data<-read.spss(SeqDataPath, use.value.labels = F, to.data.frame = T))
+	if (is.character(SeqDataPath)) 
+		{
+		suppressWarnings(Data<-read.spss(SeqDataPath, use.value.labels = F, to.data.frame = T))
+		# retrieve event type labels
+		if (is.null(tpLabels)) tpLabels<-names(attr(Data[,2],"value.labels"))[order(as.numeric(attr(Data[,2],"value.labels")))]
+		}
 	
-	# retrieve event type labels
-	tpLabels<-names(attr(Data[,2],"value.labels"))[order(as.numeric(attr(Data[,2],"value.labels")))]
-	
+	if (is.data.frame(SeqDataPath)) Data<-SeqDataPath
 	
 		# Remove rows with only missing data
 		if (length(which(apply(Data[,-c(1,2)],1,function(x) all(is.na(x)))))>0) Data<-Data[-which(apply(Data[,-c(1,2)],1,function(x) all(is.na(x)))),]
@@ -234,14 +369,14 @@ p2p_wrap<-function(SeqDataPath,
 	###############################	
 	## Start of cluster analysis ##
 	###############################
-		
-	if (is.null(CustomCluster)) {
-		
+			
 		if (is.null(costMatrix)) Cost<-seqsubm(SeqData, method = "CONSTANT", with.miss = TRUE)
 		
 		message("Calculating distances between paths")
 		Distances<-seqdist(SeqData,method="OM",indel=1,norm=T,sm=Cost,with.missing=T)
 
+	if (is.null(CustomCluster)) {
+	
 		message("Clustering paths")
 		clusterward <- agnes(Distances, diss = TRUE, method = "ward")
 
@@ -432,12 +567,13 @@ p2p_wrap<-function(SeqDataPath,
 			## Compute means for profiling
 			
 			currSol<-eval(parse(text=cN))
+			if (class(currSol)=="integer") currSol<-as.factor(currSol)
 			maxCurrSol<-max(as.numeric(as.character(currSol)))
-			if (length(NonSequenceGroup)==0) storeClusterSolutions[[cN]]<-cbind(IDs,currSol)
-			if (length(NonSequenceGroup)>0) storeClusterSolutions[[cN]]<-rbind(cbind(IDs,currSol),cbind(unlist(NonSequenceGroup),99))
+			if (length(unlist(NonSequenceGroup))==0) storeClusterSolutions[[cN]]<-cbind(IDs,currSol)
+			if (length(unlist(NonSequenceGroup))>0) storeClusterSolutions[[cN]]<-rbind(cbind(IDs,currSol),cbind(unlist(NonSequenceGroup),99))
 			
 			## Identify PROTOTYPICAL sequences
-			if (is.null(CustomCluster)) {
+			#if (is.null(CustomCluster)) {
 				DistanceFromCenter<-disscenter(Distances,currSol)
 				#DistanceFromCenter[which(currSol==1)]
 			
@@ -452,7 +588,7 @@ p2p_wrap<-function(SeqDataPath,
 					}
 				
 				storeProto[[paste("cluster",cN,sep="")]]<-tempStoreProto
-				}
+				#}
 			
 			# Map each prototype as a (temporally) directed graph - composite prototypes
 			AvgProtoSeqLength<-unlist(lapply(lapply(lapply(tempStoreProto,function(x) strsplit(x,">","")),function(x) lapply(x,length)),function(x) floor(mean(unlist(x)))))
@@ -528,31 +664,33 @@ p2p_wrap<-function(SeqDataPath,
 			# store it
 			storeStandCPSDists[[cN]]<-standDist
 			
+			
 			# Explore the sequence class membership	(range of classes is automatically selected, around a 1/5 of the number of sequences
-			RangeClassesExplore<-ceiling(maxCurrSol/5):(ceiling(maxCurrSol/5)+ceiling(maxCurrSol/5))
-			if (any(RangeClassesExplore==1)) RangeClassesExplore<-RangeClassesExplore[-1] # remove 1 class to explore, cuz can't do it. 
-			tempStoreClassAssign<-matrix(,ncol=length(RangeClassesExplore),nrow=length(currSol))
-			tempTempStoreCPSClassAssignProp<-list()
-			for (rce in RangeClassesExplore) {
-				currClassMembership<-cutree(agnes(as.dist(tempGroupDistances), diss = TRUE, method = "ward"),k=rce)
-				tempStoreCPSClassAssignProp<-list()
-				for (tg in 1:rce) {
-					tempStoreClassAssign[which(currSol%in%which(currClassMembership%in%tg)),which(RangeClassesExplore%in%rce)]<-tg
-					tempTab<-table(currSol[currSol%in%which(currClassMembership%in%tg)])
-					tempStoreCPSClassAssignProp[[tg]]<-round(tempTab/sum(tempTab),digits=2)
+			if (is.null(CustomCluster)) {
+				RangeClassesExplore<-ceiling(maxCurrSol/5):(ceiling(maxCurrSol/5)+ceiling(maxCurrSol/5))
+				if (any(RangeClassesExplore==1)) RangeClassesExplore<-RangeClassesExplore[-1] # remove 1 class to explore, cuz can't do it. 
+				tempStoreClassAssign<-matrix(,ncol=length(RangeClassesExplore),nrow=length(currSol))
+				tempTempStoreCPSClassAssignProp<-list()
+				for (rce in RangeClassesExplore) {
+					currClassMembership<-cutree(agnes(as.dist(tempGroupDistances), diss = TRUE, method = "ward"),k=rce)
+					tempStoreCPSClassAssignProp<-list()
+					for (tg in 1:rce) {
+						tempStoreClassAssign[which(currSol%in%which(currClassMembership%in%tg)),which(RangeClassesExplore%in%rce)]<-tg
+						tempTab<-table(currSol[currSol%in%which(currClassMembership%in%tg)])
+						tempStoreCPSClassAssignProp[[tg]]<-round(tempTab/sum(tempTab),digits=2)
+						}
+					colnames(tempStoreClassAssign)<-paste("numClasses",RangeClassesExplore,sep="")		
+					toStore<-Reduce("rbind",tempStoreCPSClassAssignProp)
+					rownames(toStore)<-paste("class",1:rce,sep="")
+					colnames(toStore)<-CPSNames
+					tempTempStoreCPSClassAssignProp[[rce]]<-toStore
 					}
-				colnames(tempStoreClassAssign)<-paste("numClasses",RangeClassesExplore,sep="")		
-				toStore<-Reduce("rbind",tempStoreCPSClassAssignProp)
-				rownames(toStore)<-paste("class",1:rce,sep="")
-				colnames(toStore)<-CPSNames
-				tempTempStoreCPSClassAssignProp[[rce]]<-toStore
-				}
 			
-			# store it
-			storeStandClassAssign[[cN]]<-cbind(IDs,tempStoreClassAssign)
-			storeCPSClassAssignProp[[cN]]<-tempTempStoreCPSClassAssignProp
-			
-			#storeCompositeProtosBaliaviz[[1]][which(storeCPSClassAssignProp[[cN]][[6]][2,]!=0)]
+				# store it
+				storeCPSClassAssignProp[[cN]]<-tempTempStoreCPSClassAssignProp
+				storeStandClassAssign[[cN]]<-cbind(IDs,tempStoreClassAssign)
+			}
+				
 			
 			# ... continue with profiling	
 			FirstList<-list()
@@ -561,6 +699,7 @@ p2p_wrap<-function(SeqDataPath,
 			TransitionList<-list()
 			
 			BaseSizes<-list()
+			
 			
 			for (rNg in 1:(maxCurrSol+1)) {
 				
@@ -591,8 +730,31 @@ p2p_wrap<-function(SeqDataPath,
 				TotalList[[rNg]]<-TotalPercent
 				TransitionList[[rNg]]<-TransitionRate
 				
-				}
+					##################################################################################################################
+					## Go back to composite prototype tables to fill in those tables with profiling information about the sequences ##
+					##################################################################################################################
+					if (rNg<=maxCurrSol) {
+					
+						tempNet<-storeCompositeProtos[[cN]][[rNg]]$Numeric+1
+						tempNodes<-storeCompositeProtos[[cN]][[rNg]]$Character
+						tempNet[,1]<-match(tempNodes,tpLabels)[tempNet[,1]]
+						tempNet[,2]<-match(tempNodes,tpLabels)[tempNet[,2]]
+						tempNet<-apply(tempNet,1,paste,collapse=">")
+						tempLinkSizes<-TransitionRate[match(tempNet,rownames(TransitionRate))]
+						if (any(is.na(tempLinkSizes))) tempLinkSizes[is.na(tempLinkSizes)]<-.5
+						tempNodeSizes<-TotalPercent[match(tempNodes,tpLabels)]
+					
+						storeCompositeProtos[[cN]][[rNg]]$Numeric<- cbind(storeCompositeProtos[[cN]][[rNg]]$Numeric,2-(2-10)*((tempLinkSizes-min(tempLinkSizes,na.rm=T))/(max(tempLinkSizes,na.rm=T)-min(tempLinkSizes,na.rm=T))))
+						storeCompositeProtos[[cN]][[rNg]]$Character<-cbind(tempNodes,c(5,rep(1,length(tempNodes)-2),3),2-(2-10)*((tempNodeSizes-min(tempNodeSizes))/(max(tempNodeSizes)-min(tempNodeSizes))))
+						if (!is.null(SeriesTitle)) storeCompositeProtos[[cN]][[rNg]]$Title<-paste(SeriesTitle,"_",cN,"_gr",rNg,sep="")
+					}
 				
+				}
+					
+					# Create the baliaviz visual
+					storeCompositeProtosBaliaviz[[cN]]<-lapply(storeCompositeProtos[[cN]],gen_baliaviz_fromconvertedgelist)	
+					
+					
 				# Store
 				FirstStore<-as.data.frame(Reduce("cbind",FirstList))
 					rownames(FirstStore)<-paste("FEV",1:length(tpLabels)," ",tpLabels,sep="")
@@ -618,53 +780,10 @@ p2p_wrap<-function(SeqDataPath,
 				# Bind the tables together		
 				BindedTables<-rbind(FirstStore,LastStore,TotalStore,TransitionStore)
 				BindedTablesStore[[cN]]<-BindedTables
-			
-				{ #cut
-				# Piece sequence map together
-				FirstAssigned<-assigner(FirstStore,.1)
-				Assigned<-assigner(TransitionStore,skewThreshold)
-				
-				storeGraphs<-list()
-				storeGraphTables<-list()
-				
-				for (group in 1:maxCurrSol) {
-
-					Converted<-balialab::convert_edgelist(Reduce("rbind",strsplit(Assigned$Arcs[[group]], ">","")))
-				
-					Links<-as.data.frame(cbind(Converted$Numeric-1,1))
-						colnames(Links)<-c("source","target","value")
-					Nodes<-as.data.frame(cbind(Converted$Character,1,1))
-						colnames(Nodes)<-c("name","group","size")
-						Nodes$group<-factor(Nodes$group,levels=c(1:3))
-				
-					#assign start
-					Nodes$group[which(Nodes$name%in%FirstAssigned$Arcs[[group]])]<-3
-				
-					#assign size
-					Nodes$size<-(TotalStore[match(Nodes$name,tpLabels),group]*50)+1
-				
-					#assign arc sizes
-					Links$value<-Assigned$ArcSizes[[group]]*10
-					
-					#consolidate tables
-					LinksNodes<-list(Links=Links,Nodes=Nodes)
-					storeGraphTables[[group]]<-LinksNodes
-					
-					storeGraphs[[group]]<-baliaviz::forceNetwork(Links=Links,Nodes=Nodes)	
-				}
-					}
-				masterStoreGraphs[[cN]]<-storeGraphs
-				masterStoreGraphTables[[cN]]<-storeGraphTables
+						
 				storeBaseSizes[[cN]]<-cbind(1:maxCurrSol,unlist(BaseSizes)[-length(unlist(BaseSizes))])
 			
-			##################################################################################################################
-			## Go back to composite prototype tables to fill in those tables with profiling information about the sequences ##
-			##################################################################################################################
-			
-			storeCompositeProtos[[cN]][[1]]
-			
-			storeCompositeProtosBaliaviz[[cN]]<-lapply(storeCompositeProtos[[cN]],gen_baliaviz_fromconvertedgelist)	
-			
+		
 			###########################################################################################
 			## If there are additional profile variables to append, add those and obtain their means ##
 			###########################################################################################
@@ -735,8 +854,6 @@ p2p_wrap<-function(SeqDataPath,
 			if (is.null(CustomCluster)) Return[["Prototypes"]]<-storeProto
 			Return[["TPLabels"]]<-tpLabels
 			Return[["Solutions"]]<-storeClusterSolutions
-			Return[["Graphs"]]<-masterStoreGraphs
-			Return[["GraphTables"]]<-masterStoreGraphTables
 			Return[["BaseSizes"]]<-storeBaseSizes
 			if (ConvertOutToSPSS) Return[["SPSSMainTable"]]<-SPSSOut
 			if (DFA) {
@@ -748,9 +865,11 @@ p2p_wrap<-function(SeqDataPath,
 			Return[["CompositeProtos"]]<-storeCompositeProtos
 			Return[["CompositeProtosBaliaviz"]]<-storeCompositeProtosBaliaviz
 			Return[["CPSDistances"]]<-storeStandCPSDists
-			Return[["ClassAssigned"]]<-storeStandClassAssign
-			Return[["ClassAssignProps"]]<-storeCPSClassAssignProp
-			
+			if (is.null(CustomCluster)) Return[["ClassAssigned"]]<-storeStandClassAssign
+			if (is.null(CustomCluster)) Return[["ClassAssignProps"]]<-storeCPSClassAssignProp
+			Return[["CapSeqLength"]]<-CapSeqLength
+			Return[["SeqMinLength"]]<-SeqMinLength
+			Return[["SingleState"]]<-SingleState
 		return(Return)		
 	}
 
@@ -763,8 +882,9 @@ sequence_driver<-function(SPSSPath,
 	TPVarNames,
 	TimeVarNames,
 	DurationVarName,
-	DecayTime=35,
+	#DecayTime=35,
 	DecayRate=.95,
+	tpLabels=NULL,
 	TermEventNumCode=NULL,
 	JourneySubgroups=NULL,				# this should be a specific Solutions slot from the p2p_wrap
 	ExcelOutPath=NULL
@@ -786,12 +906,20 @@ sequence_driver<-function(SPSSPath,
 	# Data read
 	suppressWarnings(Data<-read.spss(SPSSPath, use.value.labels = F, to.data.frame = T))
 
-	tpLabels<-names(attr(Data[,TPVarNames][,1],"value.labels"))[order(as.numeric(attr(Data[,TPVarNames][,1],"value.labels")))]
+	if (is.null(tpLabels)) tpLabels<-names(attr(Data[,TPVarNames][,1],"value.labels"))[order(as.numeric(attr(Data[,TPVarNames][,1],"value.labels")))]
+
+	# Remove cases that are classified as having short journey groups
+	if (!is.null(JourneySubgroups)) {
+		GroupCodesAtData<-JourneySubgroups[match(Data[,1],JourneySubgroups[,1]),2]
+		if (any(JourneySubgroups[,2]%in%99)) JourneySubgroups<-JourneySubgroups[-which(JourneySubgroups[,2]%in%99),]
+		Data<-Data[-which(GroupCodesAtData%in%99 | is.na(GroupCodesAtData)),]
+		}
+	
 	
 	Duration<-Data[,DurationVarName]
 	
 	# Grab decay
-	Decay<-decay_func(DecayTime,DecayRate)
+	Decay<-decay_func(max(Duration),DecayRate)
 	
 	MaxCode<-max(Data[,TPVarNames],na.rm=T)
 	MaxTime<-max(Data[,TimeVarNames],na.rm=T)
@@ -882,6 +1010,9 @@ sequence_driver<-function(SPSSPath,
 		
 		message("Running total level survival impact")
 		survivalData<-as.data.frame(Reduce("rbind",storeRspMats))
+		whichLowVar<-which(apply(survivalData,2,var,na.rm=T)<.009)
+		if (length(whichLowVar)>0) survivalData[,whichLowVar]<-0
+		
 		colnames(survivalData)<-c(paste("JourneyType_",1:MaxCode,sep=""),"Duration")
 		survivalVars<-colnames(survivalData)
 	
@@ -891,7 +1022,9 @@ sequence_driver<-function(SPSSPath,
 		eval(parse(text=paste("Model<-glm(",survivalVars[length(survivalVars)-1],"~.,survivalData,family='binomial')",sep="")))
 		tempResults<-coef(summary(Model))[,c(1,4)]
 			tempResults<-tempResults[match(VarsShouldModel,rownames(tempResults)),]
-			
+			tempResults<-cbind(tempResults[,1],abs(tempResults[,1]),tempResults[,2],round(100*abs(tempResults[,1])/mean(abs(tempResults[,1]),na.rm=T),digits=0))
+
+		colnames(tempResults)<-paste(paste("Gr_Total",sep=""),c("Coef","absCoef","sig","Indexed"),sep="")
 		rownames(tempResults)<-tpLabels[-TermEventNumCode]
 		StoreResults[["TotalImpact"]]<-tempResults
 		
@@ -899,15 +1032,22 @@ sequence_driver<-function(SPSSPath,
 			message("Running journey/sub group level impact")
 			JourneySubgroups<-as.data.frame(JourneySubgroups)	
 			HowManyGroups<-max(JourneySubgroups$currSol)
+			GroupCodesAtData<-JourneySubgroups[match(Data[,1],JourneySubgroups[,1]),2]
 			for (gr in 1:HowManyGroups) {
 				message(paste("Group ", gr, " of ",HowManyGroups, sep=""))
-				gr_filter<-which(unlist(storeSerials)%in%JourneySubgroups[JourneySubgroups$currSol==gr,"IDs"])
+				gr_filter<-which(GroupCodesAtData%in%gr)
 				survivalData<-as.data.frame(Reduce("rbind",storeRspMats[gr_filter]))
 				colnames(survivalData)<-c(paste("JourneyType_",1:MaxCode,sep=""),"Duration")
+				whichLowVar<-which(apply(survivalData,2,var,na.rm=T)<.009)
+				if (length(whichLowVar)>0) survivalData[,whichLowVar]<-0
+		
+				
 				survivalVars<-colnames(survivalData)
 				eval(parse(text=paste("Model<-glm(",survivalVars[length(survivalVars)-1],"~.,survivalData,family='binomial')",sep="")))
 				tempResults<-coef(summary(Model))[,c(1,4)]
 					tempResults<-tempResults[match(VarsShouldModel,rownames(tempResults)),]
+					tempResults<-cbind(tempResults[,1],abs(tempResults[,1]),tempResults[,2],round(100*abs(tempResults[,1])/mean(abs(tempResults[,1]),na.rm=T),digits=0))
+				colnames(tempResults)<-paste(paste("Gr_",gr,sep=""),c("Coef","absCoef","sig","Indexed"),sep="")
 				rownames(tempResults)<-tpLabels[-TermEventNumCode]
 				StoreResults[[paste("JGImpact",gr,sep="")]]<-tempResults
 
@@ -915,7 +1055,7 @@ sequence_driver<-function(SPSSPath,
 			}
 			
 		Return<-as.data.frame(Reduce("cbind",StoreResults))
-		colnames(Return)<-matrix(matrix(c(paste(colnames(Return)[1],names(StoreResults),sep="_"),paste(colnames(Return)[2],names(StoreResults),sep="_")),nrow=2,ncol=length(StoreResults),byrow=T))
+		#colnames(Return)<-matrix(matrix(c(paste(colnames(Return)[1],names(StoreResults),sep="_"),paste(colnames(Return)[2],names(StoreResults),sep="_")),nrow=2,ncol=length(StoreResults),byrow=T))
 	
 	if (!is.null(ExcelOutPath)) {
 		library(WriteXLS)
