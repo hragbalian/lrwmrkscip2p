@@ -201,7 +201,9 @@ p2p_wrap<-function(SeqDataPath,
 			#Group=NULL,				# Either Null, or a two slot list, one with variable name, one with variable value to select on, e.g. list("DV_Category_PipeIn",2). Creates sequences within the group. 
 			skewThreshold=.3,			# Threshold for skews to qualify as a connection in the journey map
 			CustomCluster=NULL,			# Nx2 dataframe, first column containing IDs, second column the labels. 
-			ReportBtwWithinPlot=TRUE
+			ReportBtwWithinPlot=TRUE,
+			CustomClusterIsJourneyGroup=TRUE # is the custom cluster the journey group (allows us to generate full tables with other subgroups if FALSE)
+			
 		)
 	{
 	
@@ -317,6 +319,7 @@ p2p_wrap<-function(SeqDataPath,
 	
 	# Non sequence group
 	NonSequenceGroup<-list()
+	NoJourneyGroup<-list()
 		
 	# Load data
 	message("Loading in data")
@@ -330,14 +333,24 @@ p2p_wrap<-function(SeqDataPath,
 	if (is.data.frame(SeqDataPath)) Data<-SeqDataPath
 	
 		# Remove rows with only missing data
-		if (length(which(apply(Data[,-c(1,2)],1,function(x) all(is.na(x)))))>0) Data<-Data[-which(apply(Data[,-c(1,2)],1,function(x) all(is.na(x)))),]
+		if (length(which(apply(Data[,-c(1,2)],1,function(x) all(is.na(x)))))>0 && CustomClusterIsJourneyGroup) {
+			NoJourneyGroup[[1]]<-Data[which(apply(Data[,-c(1,2)],1,function(x) all(is.na(x)))),1]
+			Data<-Data[-which(apply(Data[,-c(1,2)],1,function(x) all(is.na(x)))),]
+			}
 	
 		# If there's been a cap placed on sequence length, remove sequences greater than that cap
-		if (!is.null(CapSeqLength)) {
+		if (!is.null(SeqMinLength)) {
 			NonSequenceGroup[[length(NonSequenceGroup)+1]]<-Data[which(apply(Data[,-1],1,function(x) table(!is.na(x))[2]<SeqMinLength)),1]
 			Data<-Data[which(apply(Data[,-1],1,function(x) table(!is.na(x))[2]<=CapSeqLength & table(!is.na(x))[2]>=SeqMinLength)),]
 			Data<-Data[,c(1:(CapSeqLength+1))]
 			}
+	
+		# If customcluster has been specified and there are 98s or 99s as part of that solution, remove those codes
+		#if (!is.null(CustomCluster) && any(CustomCluster[,2]%in%c(98,99))) {
+		#	NonSequenceGroup[[length(NonSequenceGroup)+1]]<-Data[which(CustomCluster[,2]%in%c(98,99)),1]
+		#	Data<-Data[-which(CustomCluster[,2]%in%c(98,99)),]
+		#	CustomCluster<-CustomCluster[-which(CustomCluster[,2]%in%c(98,99)),]
+		#	}
 	
 		# Record the ids of everyone who remains
 		IDs<-Data[,1]
@@ -355,7 +368,7 @@ p2p_wrap<-function(SeqDataPath,
 
 	# Check to see if there are any single-step sequences.  If so, remove them from the sequences
 		Any1<-any(seqlength(SeqData)%in%1)	
-		if (Any1) {
+		if (Any1 && CustomClusterIsJourneyGroup) {
 			message("Removing single-step sequences")
 			Which1<-which(seqlength(SeqData)%in%1)	
 			NonSequenceGroup[[length(NonSequenceGroup)+1]]<-Data[Which1,1]
@@ -570,7 +583,9 @@ p2p_wrap<-function(SeqDataPath,
 			if (class(currSol)=="integer") currSol<-as.factor(currSol)
 			maxCurrSol<-max(as.numeric(as.character(currSol)))
 			if (length(unlist(NonSequenceGroup))==0) storeClusterSolutions[[cN]]<-cbind(IDs,currSol)
-			if (length(unlist(NonSequenceGroup))>0) storeClusterSolutions[[cN]]<-rbind(cbind(IDs,currSol),cbind(unlist(NonSequenceGroup),99))
+			if (length(unlist(NonSequenceGroup))>0 & length(unlist(NoJourneyGroup))==0) storeClusterSolutions[[cN]]<-rbind(cbind(IDs,currSol),cbind(unlist(NonSequenceGroup),99))
+			if (length(unlist(NonSequenceGroup))==0 & length(unlist(NoJourneyGroup))>0) storeClusterSolutions[[cN]]<-rbind(cbind(IDs,currSol),cbind(unlist(NoJourneyGroup),98))
+			if (length(unlist(NonSequenceGroup))>0 & length(unlist(NoJourneyGroup))>0) storeClusterSolutions[[cN]]<-rbind(cbind(IDs,currSol),cbind(unlist(NoJourneyGroup),98),cbind(unlist(NonSequenceGroup),99))
 			
 			## Identify PROTOTYPICAL sequences
 			#if (is.null(CustomCluster)) {
@@ -579,7 +594,8 @@ p2p_wrap<-function(SeqDataPath,
 			
 				tempStoreProto<-list()
 				for (rNg in 1:maxCurrSol) {
-					currProto<-unique(head(SeqData[currSol%in%rNg,][order(DistanceFromCenter[currSol%in%rNg]),],20))
+					#currProto<-unique(head(SeqData[currSol%in%rNg,][order(DistanceFromCenter[currSol%in%rNg]),],20))
+					currProto<-SeqData[currSol%in%rNg,][order(DistanceFromCenter[currSol%in%rNg]),]
 					currProto<-apply(currProto,2,as.character)
 					storeCurrProto<-list()
 					if (!is.null(dim(currProto))) for (prt in 1:dim(currProto)[1]) storeCurrProto[[prt]] <-suppressWarnings(paste(tpLabels[as.numeric(currProto[prt,])][!is.na(tpLabels[as.numeric(currProto[prt,])])],collapse=">"))
@@ -592,33 +608,40 @@ p2p_wrap<-function(SeqDataPath,
 			
 			# Map each prototype as a (temporally) directed graph - composite prototypes
 			AvgProtoSeqLength<-unlist(lapply(lapply(lapply(tempStoreProto,function(x) strsplit(x,">","")),function(x) lapply(x,length)),function(x) floor(mean(unlist(x)))))
+			ProtoLengths<-lapply(lapply(lapply(lapply(tempStoreProto,function(x) strsplit(x,">","")),function(x) lapply(x,length)),unlist),table)
+			max2<-unlist(lapply(ProtoLengths,function(x) as.numeric(names(x)[x%in%max(x[-which(x%in%max(x))])])))
+			longest<-unlist(ProtoLengths,function(x) as.numeric(names(x)[length(x)]))
 			CompositeProto<-list()
 			for (clu in 1:maxCurrSol) {
 				pieceCompProto<-list()
 				protoSplit<-lapply(tempStoreProto[[clu]],function(x) strsplit(x,">",""))
-				for (apsl in 1:AvgProtoSeqLength[clu]) {
+				#for (apsl in 1:AvgProtoSeqLength[clu]) {
+				for (apsl in 1:max2[clu]) {
+				#for (apsl in 1:longest[clu]) {
 					tempTab<-table(unlist(lapply(protoSplit,function(x)x[[1]][apsl])))
+					if (any(names(tempTab)%in%TerminalEventLabel)) tempTab<-tempTab[-which(names(tempTab)%in%TerminalEventLabel)]
 					namesTempTab<-names(tempTab)
 					maxTempTab<-max(tempTab)
 					tempNamesStore<-namesTempTab[which(tempTab%in%maxTempTab)]
-					if (any(tempNamesStore%in%TerminalEventLabel)) tempNamesStore<-tempNamesStore[-which(tempNamesStore%in%TerminalEventLabel)]
+					#if (any(tempNamesStore%in%TerminalEventLabel)) tempNamesStore<-tempNamesStore[-which(tempNamesStore%in%TerminalEventLabel)]
 					pieceCompProto[[apsl]]<-tempNamesStore
 					}
 					
 				# Put the purchase event as the last event, and remove it from any other slot
-				pieceCompProto[[length(pieceCompProto)+1]]<-TerminalEventLabel
+				#pieceCompProto[[length(pieceCompProto)+1]]<-TerminalEventLabel
 				if (any(unlist(lapply(pieceCompProto,length))==0)) pieceCompProto<-pieceCompProto[-which(unlist(lapply(pieceCompProto,length))==0)]
+								
 				
 				#clean it out
-				for (cc in 1:(length(pieceCompProto)-1)) {
-					if (any(pieceCompProto[[cc]]%in%pieceCompProto[[cc+1]])) {
-						finder<-which(pieceCompProto[[cc+1]]%in%pieceCompProto[[cc]])
-						pieceCompProto[[cc+1]]<-pieceCompProto[[cc+1]][-finder]
-						}
-					}
-				if (any(unlist(lapply(pieceCompProto,length))==0)) pieceCompProto<-pieceCompProto[-which(unlist(lapply(pieceCompProto,length))==0)]
-	
-					
+				#for (cc in 1:(length(pieceCompProto)-1)) {
+				#	if (any(pieceCompProto[[cc]]%in%pieceCompProto[[cc+1]])) {
+				#		finder<-which(pieceCompProto[[cc+1]]%in%pieceCompProto[[cc]])
+				#		pieceCompProto[[cc+1]]<-pieceCompProto[[cc+1]][-finder]
+				#		}
+				#	}
+				
+				#if (any(unlist(lapply(pieceCompProto,length))==0)) pieceCompProto<-pieceCompProto[-which(unlist(lapply(pieceCompProto,length))==0)]
+			
 				#piece edge list together
 				adder<-1
 				pieceCompProtoEdge<-list()
@@ -632,6 +655,14 @@ p2p_wrap<-function(SeqDataPath,
 						}
 					
 				CompositeProto[[clu]]<-Reduce("rbind",strsplit(unlist(pieceCompProtoEdge),">",""))
+				
+				# Add in the terminal event
+				if (length(CompositeProto[[clu]])>2) CompositeProto[[clu]]<-rbind(CompositeProto[[clu]],cbind(unique(matrix(CompositeProto[[clu]])),TerminalEventLabel))
+				if (length(CompositeProto[[clu]])==2) CompositeProto[[clu]]<-rbind(CompositeProto[[clu]],cbind(unique(CompositeProto[[clu]]),TerminalEventLabel))
+				
+				# Remove duplicated edges
+				CompositeProto[[clu]]<-Reduce("rbind",strsplit(unique(apply(CompositeProto[[clu]],1,paste,collapse=">")),">",""))
+				
 				if (length(CompositeProto[[clu]])==2) CompositeProto[[clu]]<-matrix(CompositeProto[[clu]],ncol=2,byrow=T)
 				}
 			
@@ -743,6 +774,13 @@ p2p_wrap<-function(SeqDataPath,
 						tempLinkSizes<-TransitionRate[match(tempNet,rownames(TransitionRate))]
 						if (any(is.na(tempLinkSizes))) tempLinkSizes[is.na(tempLinkSizes)]<-.5
 						tempNodeSizes<-TotalPercent[match(tempNodes,tpLabels)]
+						
+						# Remove an edge if the transition probability is 0
+						if (any(tempLinkSizes%in%0)) {
+							whichtoremove<-which(tempLinkSizes%in%0)
+							tempLinkSizes<-tempLinkSizes[-whichtoremove]
+							storeCompositeProtos[[cN]][[rNg]]$Numeric<-storeCompositeProtos[[cN]][[rNg]]$Numeric[-whichtoremove,]
+							}
 					
 						storeCompositeProtos[[cN]][[rNg]]$Numeric<- cbind(storeCompositeProtos[[cN]][[rNg]]$Numeric,2-(2-10)*((tempLinkSizes-min(tempLinkSizes,na.rm=T))/(max(tempLinkSizes,na.rm=T)-min(tempLinkSizes,na.rm=T))))
 						storeCompositeProtos[[cN]][[rNg]]$Character<-cbind(tempNodes,c(5,rep(1,length(tempNodes)-2),3),2-(2-10)*((tempNodeSizes-min(tempNodeSizes))/(max(tempNodeSizes)-min(tempNodeSizes))))
@@ -752,7 +790,7 @@ p2p_wrap<-function(SeqDataPath,
 				}
 					
 					# Create the baliaviz visual
-					storeCompositeProtosBaliaviz[[cN]]<-lapply(storeCompositeProtos[[cN]],gen_baliaviz_fromconvertedgelist)	
+				#	storeCompositeProtosBaliaviz[[cN]]<-lapply(storeCompositeProtos[[cN]],gen_baliaviz_fromconvertedgelist)	
 					
 					
 				# Store
@@ -863,7 +901,7 @@ p2p_wrap<-function(SeqDataPath,
 				}
 			if (ReportBtwWithinPlot) Return[["microClusterPlot"]]<-microClusterPlot
 			Return[["CompositeProtos"]]<-storeCompositeProtos
-			Return[["CompositeProtosBaliaviz"]]<-storeCompositeProtosBaliaviz
+			#Return[["CompositeProtosBaliaviz"]]<-storeCompositeProtosBaliaviz
 			Return[["CPSDistances"]]<-storeStandCPSDists
 			if (is.null(CustomCluster)) Return[["ClassAssigned"]]<-storeStandClassAssign
 			if (is.null(CustomCluster)) Return[["ClassAssignProps"]]<-storeCPSClassAssignProp
