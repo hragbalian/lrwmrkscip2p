@@ -158,6 +158,7 @@ apply_dfacoefs<-function(
 			
 		}
 		
+#function to measure the frequency of repeated journey point
 
 		
 #' Path to purchase wrapper
@@ -386,7 +387,7 @@ p2p_wrap<-function(SeqDataPath,
 		if (is.null(costMatrix)) Cost<-seqsubm(SeqData, method = "CONSTANT", with.miss = TRUE)
 		
 		message("Calculating distances between paths")
-		Distances<-seqdist(SeqData,method="OM",indel=1,norm=T,sm=Cost,with.missing=T)
+		Distances<-seqdist(SeqData,method="OM",indel=1,norm="auto",sm=Cost[-length(tpLabels),-length(tpLabels)],with.missing=T)
 
 	if (is.null(CustomCluster)) {
 	
@@ -607,41 +608,48 @@ p2p_wrap<-function(SeqDataPath,
 				#}
 			
 			# Map each prototype as a (temporally) directed graph - composite prototypes
-			AvgProtoSeqLength<-unlist(lapply(lapply(lapply(tempStoreProto,function(x) strsplit(x,">","")),function(x) lapply(x,length)),function(x) floor(mean(unlist(x)))))
-			ProtoLengths<-lapply(lapply(lapply(lapply(tempStoreProto,function(x) strsplit(x,">","")),function(x) lapply(x,length)),unlist),table)
-			max2<-unlist(lapply(ProtoLengths,function(x) as.numeric(names(x)[x%in%max(x[-which(x%in%max(x))])])))
-			longest<-unlist(ProtoLengths,function(x) as.numeric(names(x)[length(x)]))
+			#AvgProtoSeqLength<-unlist(lapply(lapply(lapply(tempStoreProto,function(x) strsplit(x,">","")),function(x) lapply(x,length)),function(x) floor(mean(unlist(x)))))
+			#ProtoLengths<-lapply(lapply(lapply(lapply(tempStoreProto,function(x) strsplit(x,">","")),function(x) lapply(x,length)),unlist),table)
+			#OverIndexWithinGroup<-lapply(WithinGroupDistributionOfJourneys,function(x) x[x>1.5*mean(x)])
+			#max2<-unlist(lapply(ProtoLengths,function(x) as.numeric(names(x)[x%in%max(x[-which(x%in%max(x))])])))
+			#longest<-unlist(ProtoLengths,function(x) as.numeric(names(x)[length(x)]))
+				
+			WithinGroupDistributionOfJourneys<-lapply(lapply(tempStoreProto,function(x) strsplit(x,">","")),function(x) table(unlist(x)))
+			MoreThan5pctWithinGroup<-lapply(WithinGroupDistributionOfJourneys,function(x) names(x[(x/sum(x))>.05]))
+			MaxJourneyLengthWithinGroup<-unlist(lapply(lapply(tempStoreProto,function(x) strsplit(x,">","")),function(x) max(unlist(lapply(x,length)))))
+			
+      
 			CompositeProto<-list()
 			for (clu in 1:maxCurrSol) {
 				pieceCompProto<-list()
-				protoSplit<-lapply(tempStoreProto[[clu]],function(x) strsplit(x,">",""))
-				#for (apsl in 1:AvgProtoSeqLength[clu]) {
-				for (apsl in 1:max2[clu]) {
-				#for (apsl in 1:longest[clu]) {
-					tempTab<-table(unlist(lapply(protoSplit,function(x)x[[1]][apsl])))
-					if (any(names(tempTab)%in%TerminalEventLabel)) tempTab<-tempTab[-which(names(tempTab)%in%TerminalEventLabel)]
-					namesTempTab<-names(tempTab)
-					maxTempTab<-max(tempTab)
-					tempNamesStore<-namesTempTab[which(tempTab%in%maxTempTab)]
-					#if (any(tempNamesStore%in%TerminalEventLabel)) tempNamesStore<-tempNamesStore[-which(tempNamesStore%in%TerminalEventLabel)]
-					pieceCompProto[[apsl]]<-tempNamesStore
+				protoSplit<-lapply(tempStoreProto[[clu]],function(x) unlist(strsplit(x,">","")))
+				protSplit_haveTerminalEvent<-unlist(lapply(protoSplit,function(x) any(x%in%TerminalEventLabel)))
+				protoSplit_clean<-protoSplit
+				for (psc in 1:length(protoSplit_clean)) if (protSplit_haveTerminalEvent[psc]) protoSplit_clean[[psc]]<-protoSplit[[psc]][-which(protoSplit[[psc]]%in%TerminalEventLabel)]
+				
+				for (apsl in 1:MaxJourneyLengthWithinGroup[clu]) {
+				  #Truncate proto split by the ones that are of a certain length
+				  protoSplit_clean_trunc<-protoSplit_clean[unlist(lapply(protoSplit_clean,function(x) length(x)))>=apsl]
+				  
+				  #Create frequency table      
+				  tempTab<-table(unlist(lapply(protoSplit_clean_trunc,function(x) x[apsl])))
+					
+					#Keep only the high frequency journey points
+					tempTab<-tempTab[names(tempTab)%in%unlist(MoreThan5pctWithinGroup[clu])]
+					if (length(tempTab)>0) {
+					  namesTempTab<-names(tempTab)
+					  maxTempTab<-max(tempTab)
+					
+				  	tempNamesStore<-namesTempTab[which(tempTab%in%maxTempTab)]
+				  	#if (any(tempNamesStore%in%TerminalEventLabel)) tempNamesStore<-tempNamesStore[-which(tempNamesStore%in%TerminalEventLabel)]
+					  pieceCompProto[[apsl]]<-tempNamesStore
+				    }
 					}
 					
 				# Put the purchase event as the last event, and remove it from any other slot
 				#pieceCompProto[[length(pieceCompProto)+1]]<-TerminalEventLabel
 				if (any(unlist(lapply(pieceCompProto,length))==0)) pieceCompProto<-pieceCompProto[-which(unlist(lapply(pieceCompProto,length))==0)]
 								
-				
-				#clean it out
-				#for (cc in 1:(length(pieceCompProto)-1)) {
-				#	if (any(pieceCompProto[[cc]]%in%pieceCompProto[[cc+1]])) {
-				#		finder<-which(pieceCompProto[[cc+1]]%in%pieceCompProto[[cc]])
-				#		pieceCompProto[[cc+1]]<-pieceCompProto[[cc+1]][-finder]
-				#		}
-				#	}
-				
-				#if (any(unlist(lapply(pieceCompProto,length))==0)) pieceCompProto<-pieceCompProto[-which(unlist(lapply(pieceCompProto,length))==0)]
-			
 				#piece edge list together
 				adder<-1
 				pieceCompProtoEdge<-list()
@@ -790,7 +798,7 @@ p2p_wrap<-function(SeqDataPath,
 				}
 					
 					# Create the baliaviz visual
-				#	storeCompositeProtosBaliaviz[[cN]]<-lapply(storeCompositeProtos[[cN]],gen_baliaviz_fromconvertedgelist)	
+					storeCompositeProtosBaliaviz[[cN]]<-lapply(storeCompositeProtos[[cN]],gen_baliaviz_fromconvertedgelist)	
 					
 					
 				# Store
@@ -901,7 +909,7 @@ p2p_wrap<-function(SeqDataPath,
 				}
 			if (ReportBtwWithinPlot) Return[["microClusterPlot"]]<-microClusterPlot
 			Return[["CompositeProtos"]]<-storeCompositeProtos
-			#Return[["CompositeProtosBaliaviz"]]<-storeCompositeProtosBaliaviz
+			Return[["CompositeProtosBaliaviz"]]<-storeCompositeProtosBaliaviz
 			Return[["CPSDistances"]]<-storeStandCPSDists
 			if (is.null(CustomCluster)) Return[["ClassAssigned"]]<-storeStandClassAssign
 			if (is.null(CustomCluster)) Return[["ClassAssignProps"]]<-storeCPSClassAssignProp
