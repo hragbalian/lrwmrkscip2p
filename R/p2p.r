@@ -1,3 +1,16 @@
+#' Facility function to help recode/combine codes
+
+
+combine_clusters<-function(p2p_wrap_object,
+                          which_solution = NULL,
+                          codes_to_combine = NULL
+) {
+  # Pull out what it needs
+  eval(parse(text=paste("tempCluster<-p2p_wrap_object$Solutions$cluster",which_solution,sep="")))
+  tempCluster[tempCluster[,2]%in%codes_to_combine,2]<-min(codes_to_combine)
+  
+}
+
 
 #' Function to remove some specific journey points from the data, and format remaining data correctly
 
